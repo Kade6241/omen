@@ -12,6 +12,10 @@ import { REVERSE_MAP, restoreClaudeToolName } from "../../services/claudeCodeToo
 import { sanitizeToolId } from "../helpers/schemaCoercion.ts";
 import { splitMarkdownBoundary } from "../helpers/markdownBoundary.ts";
 import { hasDsmlToolCalls, parseDsmlToolCalls } from "../../utils/dsmlToolCalls.ts";
+import {
+  createDirectivePreambleStripper,
+  createSystemPreambleStripper,
+} from "../../utils/directivePreambleStripper.ts";
 
 function normalizeToolName(name: string): string {
   return REVERSE_MAP[name] ?? name;
@@ -369,7 +373,29 @@ export function openaiToClaudeResponse(chunk, state) {
   if (delta?.content) {
     const strippedContent = stripInternalReasoningPlaceholder(delta.content);
     if (strippedContent) {
-      stopThinkingBlock(state, results);
+      // #reasoning-bilingual response side: DeepSeek-V4 and similar models echo the
+      // OMNIROUTE_SYSTEM_INSTRUCTION_APPEND directive (appended to the system tail by
+      // claude-to-openai.ts) verbatim at the START of their reply — the "system message
+      // leak" the operator reports. When the directive is configured, run the stream's
+      // first text chunk(s) through a preamble stripper so a leading reproduction is
+      // dropped before it reaches the client.
+      const directive = process.env.OMNIROUTE_SYSTEM_INSTRUCTION_APPEND?.trim();
+      if (directive) {
+        state._directiveStripper ??= createDirectivePreambleStripper(directive);
+      }
+      // #reasoning-bilingual response side (Phase B): DeepSeek-V4 and similar models
+      // may also echo whole chunks of the system prompt at the START of their reply —
+      // <analysis>/<system-reminder>/<summary> blocks or prose reproductions of the
+      // superpowers skill section. Run the preamble through a system-echo stripper
+      // whatever the directive setting, chained after the exact-directive stripper.
+      state._systemPreambleStripper ??= createSystemPreambleStripper();
+      let scrubbedContent = state._directiveStripper
+        ? state._directiveStripper(strippedContent)
+        : strippedContent;
+      scrubbedContent = state._systemPreambleStripper(scrubbedContent);
+      if (scrubbedContent) {
+        stopThinkingBlock(state, results);
+      }
 
       // Rehydrate any Markdown boundary suffix buffered from the previous chunk
       // before searching for XML tool calls, so the prefix is not lost.
@@ -383,7 +409,7 @@ export function openaiToClaudeResponse(chunk, state) {
       // scrubbed remainder is handed to the XML-invoke path below. A partial
       // opener at the chunk tail is held back in state for the next chunk so
       // the marker cannot leak as visible text mid-stream.
-      let dsmlContent = strippedContent;
+      let dsmlContent = scrubbedContent;
       const dsmlPending = state._dsmlHoldback;
       if (dsmlPending) {
         dsmlContent = dsmlPending + dsmlContent;
