@@ -341,29 +341,43 @@ export function openaiToClaudeResponse(chunk, state) {
     }
     if (parts.length > 0) reasoningContent = parts.join("");
   }
-  if (
-    state.requestedThinking === true &&
+  const hasReasoning =
     typeof reasoningContent === "string" &&
     reasoningContent !== "" &&
-    !isInternalReasoningPlaceholder(reasoningContent)
-  ) {
-    stopTextBlock(state, results);
+    !isInternalReasoningPlaceholder(reasoningContent);
+  if (hasReasoning) {
+    // Re-gate the thinking block EMISSION on requestedThinking === true. The
+    // _reasoningAccum accumulation below stays OUTSIDE the gate and always runs,
+    // so fix B still synthesizes a text block for reasoning-only responses (no
+    // 502, compact applies). Gating the whole block including accumulation
+    // breaks fix B => 502/compact loop.
+    if (state.requestedThinking === true) {
+      stopTextBlock(state, results);
 
-    if (!state.thinkingBlockStarted) {
-      state.thinkingBlockIndex = state.nextBlockIndex++;
-      state.thinkingBlockStarted = true;
+      if (!state.thinkingBlockStarted) {
+        state.thinkingBlockIndex = state.nextBlockIndex++;
+        state.thinkingBlockStarted = true;
+        results.push({
+          type: "content_block_start",
+          index: state.thinkingBlockIndex,
+          content_block: { type: "thinking", thinking: "" },
+        });
+      }
+
       results.push({
-        type: "content_block_start",
+        type: "content_block_delta",
         index: state.thinkingBlockIndex,
-        content_block: { type: "thinking", thinking: "" },
+        delta: { type: "thinking_delta", thinking: reasoningContent },
       });
     }
 
-    results.push({
-      type: "content_block_delta",
-      index: state.thinkingBlockIndex,
-      delta: { type: "thinking_delta", thinking: reasoningContent },
-    });
+    // FIX B: accumulate the reasoning text so the finish handler can synthesize
+    // a text content block when the response ends reasoning-only (no ordinary
+    // content block). Claude Code's autocompact parser extracts the summary from
+    // a TEXT content block — a thinking block alone is judged "empty response"
+    // and the compact is rejected, looping the session. When real content DOES
+    // arrive, it starts its own text block and this buffer is simply ignored.
+    state._reasoningAccum = (state._reasoningAccum || "") + reasoningContent;
   }
 
   // Handle regular content — strip the internal reasoning placeholder if
@@ -603,6 +617,30 @@ export function openaiToClaudeResponse(chunk, state) {
 
     state.claudeFinishEmitted = true;
     stopThinkingBlock(state, results);
+
+    // FIX B: when the response ended reasoning-only (no ordinary text block was
+    // started) and the client did NOT explicitly request thinking, synthesize a
+    // text content block from the accumulated reasoning. Claude Code's
+    // autocompact parser extracts the summary from a TEXT content block — a
+    // thinking block alone is judged "empty response" and the compact is
+    // rejected, looping the session. When requestedThinking===true, skip this so
+    // reasoning is not double-exposed (thinking block + text block both carrying it).
+    if (!state.textBlockStarted && state._reasoningAccum && state.requestedThinking !== true) {
+      state.textBlockIndex = state.nextBlockIndex++;
+      state.textBlockStarted = true;
+      state.textBlockClosed = false;
+      results.push({
+        type: "content_block_start",
+        index: state.textBlockIndex,
+        content_block: { type: "text", text: "" },
+      });
+      results.push({
+        type: "content_block_delta",
+        index: state.textBlockIndex,
+        delta: { type: "text_delta", text: state._reasoningAccum },
+      });
+    }
+
     stopTextBlock(state, results);
 
     for (const [, toolInfo] of state.toolCalls) {

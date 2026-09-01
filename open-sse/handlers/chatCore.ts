@@ -5077,7 +5077,14 @@ export async function handleChatCore({
           responsePayloadFormat,
           clientResponseFormat,
           responseToolNameMap,
-          responseToolSchemas
+          responseToolSchemas,
+          // Pass the client's thinking intent so the non-stream translator can gate
+          // the thinking block the same way the streaming translator does. Without
+          // this, a reasoning-only upstream response (GLM-5.2 autocompact) leaks a
+          // thinking block to a thinking-opt-out client. Defined inline because the
+          // shared `requestedThinking` const below (stream branch) is in the temporal
+          // dead zone here.
+          hasActiveClaudeThinking((body ?? {}) as Record<string, unknown>)
         )
       : responseBody;
     const memoryExtractionResponse = translatedResponse;
