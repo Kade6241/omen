@@ -150,6 +150,7 @@ import { ensureStreamReadiness } from "../utils/streamReadiness.ts";
 import { resolveSuppressThinkClose, THINKING_MARKER_HEADER } from "../utils/thinkCloseMarker.ts";
 import { resolveStreamReadinessTimeout } from "../utils/streamReadinessPolicy.ts";
 import { resolveAgentGoalPolicy } from "../utils/agentGoalPolicy.ts";
+import { hasActiveClaudeThinking } from "../utils/thinkingBudget.ts";
 import { createStreamController } from "../utils/streamHandler.ts";
 import * as streamFailure from "../utils/streamFailureFinalization.ts";
 import { createSseHeartbeatTransform, shapeForClientFormat } from "../utils/sseHeartbeat.ts";
@@ -5874,6 +5875,19 @@ export async function handleChatCore({
     !isDroidCLI;
   const streamStateBody = finalBody || body;
 
+  // Client's explicit thinking intent (Anthropic Messages shape). Claude Code
+  // sends `{type:"enabled"}` or `{type:"adaptive"}` to opt into relaying
+  // upstream reasoning_content as Claude thinking blocks; `{type:"disabled"}`
+  // or an omitted `thinking` field opts out. Kept false for every other
+  // client schema (OpenAI / Responses), which never express intent through
+  // `body.thinking`. Mirrors hasActiveClaudeThinking() so the request and
+  // response sides agree on what counts as "thinking requested" — a prior
+  // inline `=== "enabled"` check silently suppressed `adaptive` (the intent
+  // Claude Code actually sends), leaking the mismatch as a broken tool-call
+  // turn (call log 1787566395384-bab9ab: reasoning dropped → model emitted
+  // DSML tool-call markers as plain text → incomplete `stop` finish).
+  const requestedThinking = hasActiveClaudeThinking((body ?? {}) as Record<string, unknown>);
+
   if (needsResponsesTranslation) {
     // Provider returns openai-responses, translate to openai (Chat Completions) that clients expect
     log?.debug?.("STREAM", `Responses translation mode: openai-responses → openai`);
@@ -5891,11 +5905,8 @@ export async function handleChatCore({
       handleStreamFailure,
       copilotCompatibleReasoning,
       false,
-      customToolNames,
-      // openai-responses → openai translation still wants the namespace identity
-      // map for #7936-style round-trip closure when the client also speaks
-      // Responses (Codex CLI).
-      requestToolIdentityMap
+      requestedThinking,
+      customToolNames
     );
   } else if (needsTranslation(targetFormat, clientResponseFormat)) {
     // Standard translation for other providers
@@ -5924,6 +5935,7 @@ export async function handleChatCore({
         thinkingMarkerHeader,
         clientResponseFormat,
       }),
+      requestedThinking,
       customToolNames,
       requestToolIdentityMap
     );
