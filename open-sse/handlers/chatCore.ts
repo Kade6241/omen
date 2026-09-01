@@ -133,7 +133,11 @@ import { resolveChatCoreTargetFormat } from "./chatCore/targetFormat.ts";
 import { resolveOmniGlyphTransport } from "../services/compression/imageTransportPolicy.ts";
 import { stripStore, usesClaudeBridge } from "./chatCore/agentRouterProtocol.ts";
 import { normalizeClaudeToolsForDispatch } from "./chatCore/claudeToolDefaults.ts";
-import { injectSystemPrompt, injectCustomSystemPrompt } from "../services/systemPrompt.ts";
+import {
+  injectSystemPrompt,
+  injectCustomSystemPrompt,
+  injectSystemPromptPostTranslation,
+} from "../services/systemPrompt.ts";
 import { translateRequest, needsTranslation } from "../translator/index.ts";
 import { FORMATS } from "../translator/formats.ts";
 import { collectCustomToolNamesForSourceFormat } from "../translator/request/openai-responses/additionalTools.ts";
@@ -3068,6 +3072,14 @@ export async function handleChatCore({
         bypassDefaultToolLimit: isOpencodeClient,
         isOpencodeClient,
       });
+
+      // Global System Prompt (post-translation) — #3
+      // injectSystemPrompt (line ~498) runs PRE-translation and only handles
+      // messages[]/system, so codex/Responses bodies (input+instructions, no
+      // messages) miss the global prefix/suffix entirely. Re-inject after
+      // translation on the resolved messages[] so codex gets the After Prompt,
+      // with suffix on the LAST system/developer message (highest recency).
+      bodyToSend = injectSystemPromptPostTranslation(bodyToSend);
 
       updatePendingScope(pendingScope, {
         providerRequest: bodyToSend,

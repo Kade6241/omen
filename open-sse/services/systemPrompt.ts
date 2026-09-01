@@ -147,6 +147,91 @@ export function injectSystemPrompt<T>(body: T): T {
 }
 
 /**
+ * Prepend `text` to a message content (string or array form).
+ */
+function prependToContent(msg: Record<string, unknown>, text: string): void {
+  if (Array.isArray(msg.content)) {
+    msg.content = [{ type: "text", text }, ...msg.content];
+  } else {
+    msg.content = text + "\n\n" + (msg.content || "");
+  }
+}
+
+/**
+ * Append `text` to a message content (string or array form).
+ */
+function appendToContent(msg: Record<string, unknown>, text: string): void {
+  if (Array.isArray(msg.content)) {
+    msg.content = [...msg.content, { type: "text", text }];
+  } else {
+    msg.content = (msg.content || "") + "\n\n" + text;
+  }
+}
+
+/**
+ * Inject system prompts into a POST-TRANSLATION request body.
+ *
+ * Runs after translateRequest has resolved the body to its final messages[]
+ * form (e.g. codex/Responses `input`+`instructions` -> Chat Completions
+ * `messages[]`). This is the path injectSystemPrompt misses: injectSystemPrompt
+ * runs pre-translation (chatCore.ts) where codex bodies still have `input` and
+ * no `messages`, so the global suffix/prefix never reached the provider.
+ *
+ * With multiple system/developer messages (codex sends one developer role per
+ * input item, all normalised to `system`), prefix goes on the FIRST and suffix
+ * on the LAST so the suffix retains the highest recency position — preserving
+ * the "After Prompt" semantics. injectSystemPrompt instead attaches both to
+ * the first match (findIndex), which buries the suffix under later system
+ * messages; that is fine pre-translation where there is at most one system
+ * message, but wrong post-translation.
+ *
+ * @param {object} body - Translated request body (messages[] resolved)
+ * @returns {object} Modified body
+ */
+export function injectSystemPromptPostTranslation(body) {
+  const cfg = getConfig();
+  if (!cfg.enabled) return body;
+  const prefix = cfg.prefixPrompt || "";
+  const suffix = cfg.suffixPrompt || "";
+  if (!prefix && !suffix) return body;
+  if (!body || typeof body !== "object") return body;
+  if (body._skipSystemPrompt) return body;
+
+  const result = { ...body };
+  if (!result.messages || !Array.isArray(result.messages)) return result;
+
+  result.messages = [...result.messages];
+  const indices: number[] = [];
+  for (let i = 0; i < result.messages.length; i++) {
+    const m = result.messages[i] as { role?: string };
+    if (m && (m.role === "system" || m.role === "developer")) indices.push(i);
+  }
+
+  if (indices.length === 0) {
+    // No system message — combine both into one at the front (same as injectSystemPrompt).
+    const combined = [prefix, suffix].filter(Boolean).join("\n\n");
+    if (combined) {
+      result.messages = [{ role: "system", content: combined }, ...result.messages];
+    }
+    return result;
+  }
+
+  if (prefix) {
+    const firstIdx = indices[0];
+    result.messages[firstIdx] = { ...result.messages[firstIdx] };
+    prependToContent(result.messages[firstIdx] as Record<string, unknown>, prefix);
+  }
+  if (suffix) {
+    const lastIdx = indices[indices.length - 1];
+    if (lastIdx !== indices[0]) {
+      result.messages[lastIdx] = { ...result.messages[lastIdx] };
+    }
+    appendToContent(result.messages[lastIdx] as Record<string, unknown>, suffix);
+  }
+  return result;
+}
+
+/**
  * Inject a per-request custom system prompt into the request body.
  *
  * Unlike injectSystemPrompt (which reads from globalThis config), this
