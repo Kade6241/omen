@@ -183,10 +183,11 @@ function markInjected(body: Record<string, unknown>): void {
 /**
  * Inject system prompts into a POST-TRANSLATION request body.
  *
- * Runs after translateRequest has resolved the body to its final target shape.
- * This is the path injectSystemPrompt misses: injectSystemPrompt runs
- * pre-translation (chatCore.ts) where non-chat bodies still lack their target
- * system carrier, so the global suffix/prefix never reached the provider.
+ * Coverage model (the legacy unconditional pre-translation pass was removed —
+ * it chained into double injection): coverage = this format-aware
+ * post-translation pass for carrier-ful targets, plus the gated
+ * PRE-translation pass (injectSystemPromptPreTranslation) for carrier-less
+ * targets (kiro user-fold, antigravity Cloud Code envelope).
  *
  * Format-aware (opts.targetFormat) system carriers per target:
  *   - claude: `system` field (string or {type:"text"} block array)
@@ -336,14 +337,16 @@ export function injectSystemPromptPostTranslation(body, opts?: { targetFormat?: 
  *     the first user message (openai-to-gemini.ts:716-730). Post-translation
  *     injection at chatCore 3068 cannot reach the real carrier for either.
  *
- * Pre-translation the client body is always messages- or system-field-based,
- * so injecting here restores the coverage the removed chatCore pre-translation
- * pass used to provide — folded into the target's user-merge/relocation paths.
+ * Pre-translation the client body reaches this gate in one of four shapes,
+ * ALL covered here: messages[] (openai/codex source), claude `system` field
+ * (string), responses `input` + `instructions` (hub translation promotes
+ * instructions to a system message, openai-responses.ts:205-207), and gemini
+ * `contents` + `systemInstruction`. Not covered — and rejected by the guards
+ * above — are bodies with none of these carriers (empty/no-op return).
  *
- * SINGLE-CARRIER guarantee: writes into exactly ONE carrier (messages[]
- * system/developer role, else body.system for claude-format client bodies,
- * else a combined system message) — never both. The removed pass dual-wrote
- * messages[] AND body.system; both would survive translation and fold ×2.
+ * SINGLE-CARRIER guarantee: writes into exactly ONE carrier — never both. The
+ * removed pass dual-wrote messages[] AND body.system; both would survive
+ * translation and fold ×2.
  *
  * @param {object} body - PRE-translation request body (client format)
  * @param {object} [opts] - `{ targetFormat }` of the resolved wire target
@@ -366,7 +369,57 @@ export function injectSystemPromptPreTranslation(body, opts?: { targetFormat?: s
   const CARRIERLESS_TARGETS = new Set(["kiro", "antigravity"]);
   if (!CARRIERLESS_TARGETS.has(targetFormat)) return body;
 
+  const combined = [prefix, suffix].filter(Boolean).join("\n\n");
   const result = { ...body };
+
+  // Claude-source client body: the `system` field is the authoritative carrier
+  // (#2468 ordering — prefix → client content → suffix). Checked FIRST so a
+  // body that also carries messages[] (user/assistant turns) never gets a
+  // second write into messages.
+  if (typeof result.system === "string") {
+    let sys = result.system;
+    if (prefix) sys = prefix + "\n\n" + sys;
+    if (suffix) sys = sys + "\n\n" + suffix;
+    result.system = sys;
+    markInjected(result);
+    return result;
+  }
+  if (Array.isArray(result.system)) {
+    let arr = [...result.system];
+    if (prefix) arr = [{ type: "text", text: prefix }, ...arr];
+    if (suffix) arr = [...arr, { type: "text", text: suffix }];
+    result.system = arr;
+    markInjected(result);
+    return result;
+  }
+
+  // Responses-source client body (input + instructions): wrap the instructions
+  // string once — the hub translation promotes it to a system message
+  // (openai-responses.ts:205-207) which the target then folds. Do NOT touch
+  // `input` (message items, not a system carrier).
+  if (Array.isArray(result.input)) {
+    const base = typeof result.instructions === "string" ? result.instructions : "";
+    result.instructions = [prefix, base, suffix].filter(Boolean).join("\n\n");
+    markInjected(result);
+    return result;
+  }
+
+  // Gemini-source client body (contents + systemInstruction): inject into the
+  // parts once each; create the carrier when absent.
+  if (result.contents !== undefined) {
+    if (result.systemInstruction && typeof result.systemInstruction === "object") {
+      const si = result.systemInstruction as { role?: string; parts?: unknown[] };
+      const parts = Array.isArray(si.parts) ? [...si.parts] : [];
+      if (prefix) parts.unshift({ text: prefix });
+      if (suffix) parts.push({ text: suffix });
+      result.systemInstruction = { ...si, role: si.role || "system", parts };
+    } else {
+      const texts = [prefix, suffix].filter(Boolean);
+      result.systemInstruction = { role: "system", parts: texts.map((text) => ({ text })) };
+    }
+    markInjected(result);
+    return result;
+  }
 
   // OpenAI-style client body: write into the system/developer message only.
   if (Array.isArray(result.messages)) {
@@ -379,7 +432,6 @@ export function injectSystemPromptPreTranslation(body, opts?: { targetFormat?: s
       if (prefix) prependToContent(result.messages[sysIdx] as Record<string, unknown>, prefix);
       if (suffix) appendToContent(result.messages[sysIdx] as Record<string, unknown>, suffix);
     } else {
-      const combined = [prefix, suffix].filter(Boolean).join("\n\n");
       if (combined) {
         result.messages = [{ role: "system", content: combined }, ...result.messages];
       }
@@ -388,16 +440,6 @@ export function injectSystemPromptPreTranslation(body, opts?: { targetFormat?: s
     return result;
   }
 
-  // Claude-format client body (separate `system` field, no system-role
-  // message): single write into body.system — translation promotes it to the
-  // system message the target then folds. Never write both carriers.
-  if (typeof result.system === "string") {
-    let sys = result.system;
-    if (prefix) sys = prefix + "\n\n" + sys;
-    if (suffix) sys = sys + "\n\n" + suffix;
-    result.system = sys;
-    markInjected(result);
-  }
   return result;
 }
 

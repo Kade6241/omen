@@ -20,7 +20,12 @@ function countOccurrences(s, needle) {
 
 test("idempotence: second application is a no-op (ONE copy of prefix/suffix)", () => {
   resetConfig();
-  const body = { messages: [{ role: "system", content: "ORIG" }, { role: "user", content: "hi" }] };
+  const body = {
+    messages: [
+      { role: "system", content: "ORIG" },
+      { role: "user", content: "hi" },
+    ],
+  };
   const once = injectSystemPromptPostTranslation(body);
   const twice = injectSystemPromptPostTranslation(once);
   assert.equal(twice.messages.length, once.messages.length, "no message growth on second pass");
@@ -43,14 +48,21 @@ test("claude-format body: system field gets injection, messages untouched", () =
   const body = { system: "CLIENT", messages: [{ role: "user", content: "hi" }] };
   const out = injectSystemPromptPostTranslation(body);
   assert.equal(out.system, "PREFIX-RULES\n\nCLIENT\n\nSUFFIX-RULES");
-  assert.ok(!out.messages.some((m) => m.role === "system"), "no system-role message inside claude messages");
+  assert.ok(
+    !out.messages.some((m) => m.role === "system"),
+    "no system-role message inside claude messages"
+  );
 });
 
 test("idempotence flag does not leak into upstream JSON", () => {
   resetConfig();
   const body = { messages: [{ role: "user", content: "hi" }] };
   const out = injectSystemPromptPostTranslation(body);
-  assert.equal(JSON.stringify(out).includes("_systemPromptInjected"), false, "flag must stay non-enumerable");
+  assert.equal(
+    JSON.stringify(out).includes("_systemPromptInjected"),
+    false,
+    "flag must stay non-enumerable"
+  );
 });
 
 test("multi-system codex semantics preserved: prefix on first, suffix on last", () => {
@@ -79,12 +91,18 @@ test("claude-format body WITHOUT system field: combined goes to body.system, not
   const body = { messages: [{ role: "user", content: "hi" }] };
   const out = injectSystemPromptPostTranslation(body, { targetFormat: "claude" });
   assert.equal(out.system, "PREFIX-RULES\n\nSUFFIX-RULES");
-  assert.ok(!out.messages.some((m) => m.role === "system"), "claude target must never get a system-role message in messages");
+  assert.ok(
+    !out.messages.some((m) => m.role === "system"),
+    "claude target must never get a system-role message in messages"
+  );
 });
 
 test("claude-format array system: prefix/suffix as text blocks, once each", () => {
   resetConfig();
-  const body = { system: [{ type: "text", text: "CLIENT" }], messages: [{ role: "user", content: "hi" }] };
+  const body = {
+    system: [{ type: "text", text: "CLIENT" }],
+    messages: [{ role: "user", content: "hi" }],
+  };
   const out = injectSystemPromptPostTranslation(body, { targetFormat: "claude" });
   assert.deepEqual(out.system, [
     { type: "text", text: "PREFIX-RULES" },
@@ -123,7 +141,11 @@ test("responses-format body: instructions wrapped once, input untouched", () => 
   resetConfig();
   // Real targetFormat value is FORMATS.OPENAI_RESPONSES = "openai-responses"
   // (open-sse/translator/formats.ts), not "responses".
-  const body = { model: "m", input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }], instructions: "INSTR" };
+  const body = {
+    model: "m",
+    input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }],
+    instructions: "INSTR",
+  };
   const out = injectSystemPromptPostTranslation(body, { targetFormat: "openai-responses" });
   assert.equal(out.instructions, "PREFIX-RULES\n\nINSTR\n\nSUFFIX-RULES");
   assert.equal(out.input.length, 1);
@@ -131,7 +153,10 @@ test("responses-format body: instructions wrapped once, input untouched", () => 
 
 test("responses-format body without instructions: combined instructions created", () => {
   resetConfig();
-  const body = { model: "m", input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }] };
+  const body = {
+    model: "m",
+    input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }],
+  };
   const out = injectSystemPromptPostTranslation(body, { targetFormat: "openai-responses" });
   assert.equal(out.instructions, "PREFIX-RULES\n\nSUFFIX-RULES");
 });
@@ -143,7 +168,12 @@ test("responses-format body without instructions: combined instructions created"
 // once so the translator's <system-reminder> fold carries prefix+suffix once.
 test("pre-translation gate: kiro target gets single messages[] injection", () => {
   resetConfig();
-  const body = { messages: [{ role: "system", content: "SYS" }, { role: "user", content: "hi" }] };
+  const body = {
+    messages: [
+      { role: "system", content: "SYS" },
+      { role: "user", content: "hi" },
+    ],
+  };
   const out = injectSystemPromptPreTranslation(body, { targetFormat: "kiro" });
   const sysMsg = out.messages.find((m) => m.role === "system");
   assert.ok(sysMsg, "system message preserved");
@@ -154,7 +184,10 @@ test("pre-translation gate: kiro target gets single messages[] injection", () =>
 test("pre-translation gate: kiro target with array system content gets text blocks", () => {
   resetConfig();
   const body = {
-    messages: [{ role: "system", content: [{ type: "text", text: "SYS" }] }, { role: "user", content: "hi" }],
+    messages: [
+      { role: "system", content: [{ type: "text", text: "SYS" }] },
+      { role: "user", content: "hi" },
+    ],
   };
   const out = injectSystemPromptPreTranslation(body, { targetFormat: "kiro" });
   const texts = out.messages[0].content.map((c) => c.text).join("|");
@@ -173,25 +206,57 @@ test("pre-translation gate: kiro target without system message inserts combined 
 
 test("pre-translation gate: idempotent on second application", () => {
   resetConfig();
-  const body = { messages: [{ role: "system", content: "SYS" }, { role: "user", content: "hi" }] };
+  const body = {
+    messages: [
+      { role: "system", content: "SYS" },
+      { role: "user", content: "hi" },
+    ],
+  };
   const once = injectSystemPromptPreTranslation(body, { targetFormat: "kiro" });
   const twice = injectSystemPromptPreTranslation(once, { targetFormat: "kiro" });
   assert.equal(twice.messages.length, once.messages.length);
   assert.equal(countOccurrences(String(twice.messages[0].content), PREFIX), 1);
 });
 
-test("pre-translation gate: does NOT dual-write body.system (kiro reads messages only)", () => {
+test("pre-translation gate: does NOT dual-write — system field wins, messages untouched", () => {
   resetConfig();
-  const body = { system: "STRAY", messages: [{ role: "system", content: "SYS" }, { role: "user", content: "hi" }] };
+  // Round-3 M-2: for a body carrying BOTH carriers, the claude-source `system`
+  // field is the authoritative one (#2468 ordering: prefix → client → suffix);
+  // messages must stay untouched so the wrap is never duplicated.
+  const body = {
+    system: "STRAY",
+    messages: [
+      { role: "system", content: "SYS" },
+      { role: "user", content: "hi" },
+    ],
+  };
   const out = injectSystemPromptPreTranslation(body, { targetFormat: "kiro" });
-  assert.equal(out.system, "STRAY", "system field must stay untouched — dual-write would duplicate upstream");
+  assert.equal(
+    out.system,
+    "PREFIX-RULES\n\nSTRAY\n\nSUFFIX-RULES",
+    "system field is the single carrier"
+  );
+  assert.equal(
+    countOccurrences(String(out.messages[0].content), PREFIX),
+    0,
+    "messages untouched — dual-write would duplicate upstream"
+  );
 });
 
 test("pre-translation gate: no-op for carrier-ful targets (openai handled at 3068)", () => {
   resetConfig();
-  const body = { messages: [{ role: "system", content: "SYS" }, { role: "user", content: "hi" }] };
+  const body = {
+    messages: [
+      { role: "system", content: "SYS" },
+      { role: "user", content: "hi" },
+    ],
+  };
   const out = injectSystemPromptPreTranslation(body, { targetFormat: "openai" });
-  assert.equal(countOccurrences(String(out.messages[0].content), PREFIX), 0, "openai must get its injection post-translation, not pre");
+  assert.equal(
+    countOccurrences(String(out.messages[0].content), PREFIX),
+    0,
+    "openai must get its injection post-translation, not pre"
+  );
   assert.equal(out.messages[0].content, "SYS");
 });
 
@@ -215,7 +280,12 @@ test("pre-translation gate: no-op when disabled or no prompts configured", () =>
 // gated PRE-translation into client messages, same as kiro.
 test("pre-translation gate: antigravity target gets single messages[] injection", () => {
   resetConfig();
-  const body = { messages: [{ role: "system", content: "SYS" }, { role: "user", content: "hi" }] };
+  const body = {
+    messages: [
+      { role: "system", content: "SYS" },
+      { role: "user", content: "hi" },
+    ],
+  };
   const out = injectSystemPromptPreTranslation(body, { targetFormat: "antigravity" });
   const sysMsg = out.messages.find((m) => m.role === "system");
   assert.ok(sysMsg, "system message preserved");
@@ -242,8 +312,67 @@ test("gemini branch: antigravity envelope must NOT get a top-level systemInstruc
     request: { contents: [{ role: "user", parts: [{ text: "hi" }] }] },
   };
   const out = injectSystemPromptPostTranslation(body, { targetFormat: "antigravity" });
-  assert.equal(out.systemInstruction, undefined, "no invalid top-level systemInstruction on a Cloud Code envelope");
+  assert.equal(
+    out.systemInstruction,
+    undefined,
+    "no invalid top-level systemInstruction on a Cloud Code envelope"
+  );
   assert.equal(out.messages, undefined, "envelope has no messages to mutate");
+});
+
+// ---- Round 3: source-shape coverage in the gate ----
+
+// I-NEW-1: a responses-source client (e.g. /v1/responses falling back to a kiro
+// connection) reaches the gate with {input, instructions} — no messages[], no
+// system field. The hub translation (openai-responses -> openai,
+// openai-responses.ts:205-207) promotes instructions to a system message, so
+// wrapping instructions here reaches the kiro <system-reminder> fold.
+test("pre-translation gate: responses-source body gets instructions wrapped once, input untouched", () => {
+  resetConfig();
+  const body = {
+    model: "m",
+    input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }],
+    instructions: "INSTR",
+  };
+  const out = injectSystemPromptPreTranslation(body, { targetFormat: "kiro" });
+  assert.equal(out.instructions, "PREFIX-RULES\n\nINSTR\n\nSUFFIX-RULES");
+  assert.equal(out.input.length, 1, "input untouched");
+});
+
+test("pre-translation gate: responses-source without instructions creates combined", () => {
+  resetConfig();
+  const body = {
+    model: "m",
+    input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }],
+  };
+  const out = injectSystemPromptPreTranslation(body, { targetFormat: "kiro" });
+  assert.equal(out.instructions, "PREFIX-RULES\n\nSUFFIX-RULES");
+  assert.equal(out.input.length, 1);
+});
+
+// gemini-source client (contents + systemInstruction) reaching a carrier-less
+// target: inject into systemInstruction parts exactly once.
+test("pre-translation gate: gemini-source body gets systemInstruction parts once each", () => {
+  resetConfig();
+  const body = {
+    contents: [{ role: "user", parts: [{ text: "hi" }] }],
+    systemInstruction: { role: "system", parts: [{ text: "CLIENT" }] },
+  };
+  const out = injectSystemPromptPreTranslation(body, { targetFormat: "antigravity" });
+  const texts = out.systemInstruction.parts.map((p) => p.text);
+  assert.equal(texts.filter((t) => t === "PREFIX-RULES").length, 1);
+  assert.equal(texts.filter((t) => t === "SUFFIX-RULES").length, 1);
+  assert.ok(texts.includes("CLIENT"));
+});
+
+test("pre-translation gate: gemini-source without systemInstruction creates combined parts", () => {
+  resetConfig();
+  const body = { contents: [{ role: "user", parts: [{ text: "hi" }] }] };
+  const out = injectSystemPromptPreTranslation(body, { targetFormat: "antigravity" });
+  const texts = out.systemInstruction.parts.map((p) => p.text).join("|");
+  assert.equal(countOccurrences(texts, "PREFIX-RULES"), 1);
+  assert.equal(countOccurrences(texts, "SUFFIX-RULES"), 1);
+  assert.equal(out.contents.length, 1, "contents untouched");
 });
 
 // M3: reset config so this file's settings never leak into other test files.
