@@ -36,8 +36,10 @@
  * flag set, the account may use explicit model selection (paid plans).
  *
  * For auto-only accounts, OmniRoute presents a single virtual model
- * `COPILOT_AUTO_MODEL_ID` that sends `gpt-4o` to the upstream endpoint —
- * the model GitHub historically uses as the default for these plans.
+ * `COPILOT_AUTO_MODEL_ID` that sends `gpt-4o-2024-11-20` to the upstream
+ * endpoint — the model ID GitHub historically accepts for Free / Student
+ * plan requests. GitHub may still route to a different underlying model
+ * at its discretion; do not promise a specific model to the user.
  *
  * ## Quota
  *
