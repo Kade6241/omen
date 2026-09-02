@@ -59,6 +59,7 @@ test("duplicate turn result uses a sanitized 409 body and retry headers", async 
       message: "An identical request is already in progress",
       type: "turn_in_progress",
       code: "turn_in_progress",
+      reason: undefined,
     },
   });
   assert.equal(duplicate.result.status, 409);
@@ -66,5 +67,8 @@ test("duplicate turn result uses a sanitized 409 body and retry headers", async 
   assert.equal(duplicate.result.errorCode, "turn_in_progress");
   assert.equal(duplicate.result.response.headers.get("Retry-After"), "1");
   assert.equal(duplicate.result.response.headers.get("X-OmniRoute-Turn-Retry"), "3");
-  assert.deepEqual(await duplicate.result.response.json(), duplicate.body);
+  assert.deepEqual(
+    await duplicate.result.response.json(),
+    JSON.parse(JSON.stringify(duplicate.body)),
+  );
 });
