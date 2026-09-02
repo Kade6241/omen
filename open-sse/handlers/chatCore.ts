@@ -3076,10 +3076,10 @@ export async function handleChatCore({
       // was removed: it chained with this pass to inject prefix/suffix 2-3x
       // and dual-wrote body.system + messages[] on the claude path, which
       // strict upstreams (HCP-Vision vLLM: "System message must be at the
-      // beginning") reject with 400. This post-translation pass now handles
-      // all formats — prefix on FIRST system, suffix on LAST (highest
-      // recency), claude `system` field branch, idempotence flag guard.
-      bodyToSend = injectSystemPromptPostTranslation(bodyToSend);
+      // beginning") reject with 400. Format-aware via targetFormat: messages[]
+      // (openai/codex — prefix FIRST system, suffix LAST), claude `system`
+      // field, gemini `systemInstruction`, responses `instructions`.
+      bodyToSend = injectSystemPromptPostTranslation(bodyToSend, { targetFormat });
 
       updatePendingScope(pendingScope, {
         providerRequest: bodyToSend,

@@ -72,3 +72,68 @@ test("skip flag respected", () => {
   const out = injectSystemPromptPostTranslation(body);
   assert.equal(out.messages.length, 1, "no injection when _skipSystemPrompt");
 });
+
+test("claude-format body WITHOUT system field: combined goes to body.system, not messages", () => {
+  resetConfig();
+  const body = { messages: [{ role: "user", content: "hi" }] };
+  const out = injectSystemPromptPostTranslation(body, { targetFormat: "claude" });
+  assert.equal(out.system, "PREFIX-RULES\n\nSUFFIX-RULES");
+  assert.ok(!out.messages.some((m) => m.role === "system"), "claude target must never get a system-role message in messages");
+});
+
+test("claude-format array system: prefix/suffix as text blocks, once each", () => {
+  resetConfig();
+  const body = { system: [{ type: "text", text: "CLIENT" }], messages: [{ role: "user", content: "hi" }] };
+  const out = injectSystemPromptPostTranslation(body, { targetFormat: "claude" });
+  assert.deepEqual(out.system, [
+    { type: "text", text: "PREFIX-RULES" },
+    { type: "text", text: "CLIENT" },
+    { type: "text", text: "SUFFIX-RULES" },
+  ]);
+  assert.ok(!out.messages.some((m) => m.role === "system"));
+});
+
+test("gemini-format body: systemInstruction parts get prefix/suffix once each", () => {
+  resetConfig();
+  // Real shape produced by open-sse/translator/request/claude-to-gemini.ts:95-97
+  // and openai-to-gemini.ts:350-356: { role: "system", parts: [{ text }] }
+  const body = {
+    contents: [{ role: "user", parts: [{ text: "hi" }] }],
+    systemInstruction: { role: "system", parts: [{ text: "CLIENT" }] },
+  };
+  const out = injectSystemPromptPostTranslation(body, { targetFormat: "gemini" });
+  const texts = out.systemInstruction.parts.map((p) => p.text);
+  assert.equal(texts.filter((t) => t === "PREFIX-RULES").length, 1);
+  assert.equal(texts.filter((t) => t === "SUFFIX-RULES").length, 1);
+  assert.ok(texts.includes("CLIENT"));
+});
+
+test("gemini-format body without systemInstruction: combined systemInstruction created", () => {
+  resetConfig();
+  const body = { contents: [{ role: "user", parts: [{ text: "hi" }] }] };
+  const out = injectSystemPromptPostTranslation(body, { targetFormat: "gemini" });
+  const texts = out.systemInstruction.parts.map((p) => p.text).join("|");
+  assert.equal(countOccurrences(texts, "PREFIX-RULES"), 1);
+  assert.equal(countOccurrences(texts, "SUFFIX-RULES"), 1);
+  assert.equal(out.contents.length, 1, "contents untouched");
+});
+
+test("responses-format body: instructions wrapped once, input untouched", () => {
+  resetConfig();
+  // Real targetFormat value is FORMATS.OPENAI_RESPONSES = "openai-responses"
+  // (open-sse/translator/formats.ts), not "responses".
+  const body = { model: "m", input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }], instructions: "INSTR" };
+  const out = injectSystemPromptPostTranslation(body, { targetFormat: "openai-responses" });
+  assert.equal(out.instructions, "PREFIX-RULES\n\nINSTR\n\nSUFFIX-RULES");
+  assert.equal(out.input.length, 1);
+});
+
+test("responses-format body without instructions: combined instructions created", () => {
+  resetConfig();
+  const body = { model: "m", input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }] };
+  const out = injectSystemPromptPostTranslation(body, { targetFormat: "openai-responses" });
+  assert.equal(out.instructions, "PREFIX-RULES\n\nSUFFIX-RULES");
+});
+
+// M3: reset config so this file's settings never leak into other test files.
+test.after(() => setSystemPromptConfig({ enabled: false, prefixPrompt: "", suffixPrompt: "" }));

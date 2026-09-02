@@ -93,6 +93,7 @@ export function injectSystemPrompt<T>(body: T): T {
   if (!prefix && !suffix) return body;
   if (!isRecord(body)) return body;
   if (body._skipSystemPrompt) return body;
+  if (body._systemPromptInjected) return body;
 
   const result: Record<string, unknown> = { ...body };
 
@@ -143,7 +144,8 @@ export function injectSystemPrompt<T>(body: T): T {
     }
   }
 
-  return Object.assign({}, body, result);
+  markInjected(result);
+  return result;
 }
 
 /**
@@ -181,24 +183,24 @@ function markInjected(body: Record<string, unknown>): void {
 /**
  * Inject system prompts into a POST-TRANSLATION request body.
  *
- * Runs after translateRequest has resolved the body to its final messages[]
- * form (e.g. codex/Responses `input`+`instructions` -> Chat Completions
- * `messages[]`). This is the path injectSystemPrompt misses: injectSystemPrompt
- * runs pre-translation (chatCore.ts) where codex bodies still have `input` and
- * no `messages`, so the global suffix/prefix never reached the provider.
+ * Runs after translateRequest has resolved the body to its final target shape.
+ * This is the path injectSystemPrompt misses: injectSystemPrompt runs
+ * pre-translation (chatCore.ts) where non-chat bodies still lack their target
+ * system carrier, so the global suffix/prefix never reached the provider.
  *
- * With multiple system/developer messages (codex sends one developer role per
- * input item, all normalised to `system`), prefix goes on the FIRST and suffix
- * on the LAST so the suffix retains the highest recency position — preserving
- * the "After Prompt" semantics. injectSystemPrompt instead attaches both to
- * the first match (findIndex), which buries the suffix under later system
- * messages; that is fine pre-translation where there is at most one system
- * message, but wrong post-translation.
+ * Format-aware (opts.targetFormat) system carriers per target:
+ *   - claude: `system` field (string or {type:"text"} block array)
+ *   - gemini: `systemInstruction` ({ role, parts: [{ text }] })
+ *   - openai-responses: `instructions` string
+ *   - openai/codex (default): messages[] system/developer roles — prefix on
+ *     the FIRST and suffix on the LAST so the suffix retains the highest
+ *     recency position, preserving the "After Prompt" semantics.
  *
- * @param {object} body - Translated request body (messages[] resolved)
+ * @param {object} body - Translated request body (target shape resolved)
+ * @param {object} [opts] - `{ targetFormat }` from the resolved wire target
  * @returns {object} Modified body
  */
-export function injectSystemPromptPostTranslation(body) {
+export function injectSystemPromptPostTranslation(body, opts?: { targetFormat?: string }) {
   const cfg = getConfig();
   if (!cfg.enabled) return body;
   const prefix = cfg.prefixPrompt || "";
@@ -207,15 +209,18 @@ export function injectSystemPromptPostTranslation(body) {
   if (!body || typeof body !== "object") return body;
   if (body._skipSystemPrompt) return body;
   if (body._systemPromptInjected) return body;
+  const targetFormat = opts?.targetFormat || "";
+  const combined = [prefix, suffix].filter(Boolean).join("\n\n");
 
   const result = { ...body };
 
-  // Claude-format body (separate `system` field, messages without any
-  // system/developer role): inject into body.system — a system-role message
-  // inside claude messages[] is invalid there. Mirrors the claude branch of
-  // injectSystemPrompt so this unified pass keeps the coverage the removed
-  // pre-translation pass used to provide.
-  if (result.system !== undefined) {
+  // Claude-format body (separate `system` field, or a claude target whose
+  // translated body has no system-role message to carry the prompt): inject
+  // into body.system — a system-role message inside claude messages[] is
+  // invalid there. When the translated body has no system field at all, CREATE
+  // it (combined) — previously this body shape fell through the messages[]
+  // early-return and silently got zero injection.
+  if (targetFormat === "claude" || result.system !== undefined) {
     const hasSystemRole =
       Array.isArray(result.messages) &&
       result.messages.some((m) => m && (m.role === "system" || m.role === "developer"));
@@ -230,10 +235,52 @@ export function injectSystemPromptPostTranslation(body) {
         if (prefix) arr = [{ type: "text", text: prefix }, ...arr];
         if (suffix) arr = [...arr, { type: "text", text: suffix }];
         result.system = arr;
+      } else {
+        result.system = combined;
       }
       markInjected(result);
       return result;
     }
+  }
+
+  // Gemini-format body (contents[] + systemInstruction): inject into the
+  // systemInstruction parts (real translator shape: { role: "system",
+  // parts: [{ text }] }, see translator/request/claude-to-gemini.ts:95). If
+  // absent, create it — a messages-less gemini body previously fell through
+  // the messages[] early-return and silently got zero injection.
+  if (targetFormat === "gemini") {
+    if (result.systemInstruction && typeof result.systemInstruction === "object") {
+      const si = result.systemInstruction as { role?: string; parts?: unknown[] };
+      const parts = Array.isArray(si.parts) ? [...si.parts] : [];
+      if (prefix) parts.unshift({ text: prefix });
+      if (suffix) parts.push({ text: suffix });
+      result.systemInstruction = { ...si, role: si.role || "system", parts };
+    } else {
+      const texts = [prefix, suffix].filter(Boolean);
+      result.systemInstruction = { role: "system", parts: texts.map((text) => ({ text })) };
+    }
+    markInjected(result);
+    return result;
+  }
+
+  // OpenAI Responses-format body (input + instructions): instructions is a
+  // plain string — wrap once. If absent, create it with the combined prompt.
+  // Do NOT touch `input` (message items, not a system carrier).
+  if (targetFormat === "openai-responses") {
+    const base = typeof result.instructions === "string" ? result.instructions : "";
+    const parts = [prefix, base, suffix].filter(Boolean);
+    result.instructions = parts.join("\n\n");
+    markInjected(result);
+    return result;
+  }
+
+  // Kiro (conversationState/.../userInputMessage) has NO system carrier at all:
+  // openai-to-kiro.ts folds system messages into user turns wrapped in
+  // <system-reminder> tags (#2306) and the executor keeps no system slot.
+  // Injection here would require inventing a carrier kiro upstreams reject —
+  // so kiro intentionally receives no global-prompt injection at this seam.
+  if (targetFormat === "kiro") {
+    return result;
   }
 
   if (!result.messages || !Array.isArray(result.messages)) return result;
@@ -247,7 +294,6 @@ export function injectSystemPromptPostTranslation(body) {
 
   if (indices.length === 0) {
     // No system message — combine both into one at the front (same as injectSystemPrompt).
-    const combined = [prefix, suffix].filter(Boolean).join("\n\n");
     if (combined) {
       result.messages = [{ role: "system", content: combined }, ...result.messages];
     }
