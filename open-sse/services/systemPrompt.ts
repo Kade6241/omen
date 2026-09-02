@@ -168,6 +168,16 @@ function appendToContent(msg: Record<string, unknown>, text: string): void {
   }
 }
 
+// Non-enumerable marker: survives property access for the retry-loop guard,
+// invisible to JSON.stringify so it never leaks into the upstream request body.
+function markInjected(body: Record<string, unknown>): void {
+  try {
+    Object.defineProperty(body, "_systemPromptInjected", { value: true, enumerable: false });
+  } catch {
+    /* frozen/non-object edge — ignore */
+  }
+}
+
 /**
  * Inject system prompts into a POST-TRANSLATION request body.
  *
@@ -196,8 +206,36 @@ export function injectSystemPromptPostTranslation(body) {
   if (!prefix && !suffix) return body;
   if (!body || typeof body !== "object") return body;
   if (body._skipSystemPrompt) return body;
+  if (body._systemPromptInjected) return body;
 
   const result = { ...body };
+
+  // Claude-format body (separate `system` field, messages without any
+  // system/developer role): inject into body.system — a system-role message
+  // inside claude messages[] is invalid there. Mirrors the claude branch of
+  // injectSystemPrompt so this unified pass keeps the coverage the removed
+  // pre-translation pass used to provide.
+  if (result.system !== undefined) {
+    const hasSystemRole =
+      Array.isArray(result.messages) &&
+      result.messages.some((m) => m && (m.role === "system" || m.role === "developer"));
+    if (!hasSystemRole) {
+      if (typeof result.system === "string") {
+        let sys = result.system;
+        if (prefix) sys = prefix + "\n\n" + sys;
+        if (suffix) sys = sys + "\n\n" + suffix;
+        result.system = sys;
+      } else if (Array.isArray(result.system)) {
+        let arr = [...result.system];
+        if (prefix) arr = [{ type: "text", text: prefix }, ...arr];
+        if (suffix) arr = [...arr, { type: "text", text: suffix }];
+        result.system = arr;
+      }
+      markInjected(result);
+      return result;
+    }
+  }
+
   if (!result.messages || !Array.isArray(result.messages)) return result;
 
   result.messages = [...result.messages];
@@ -213,6 +251,7 @@ export function injectSystemPromptPostTranslation(body) {
     if (combined) {
       result.messages = [{ role: "system", content: combined }, ...result.messages];
     }
+    markInjected(result);
     return result;
   }
 
@@ -228,6 +267,7 @@ export function injectSystemPromptPostTranslation(body) {
     }
     appendToContent(result.messages[lastIdx] as Record<string, unknown>, suffix);
   }
+  markInjected(result);
   return result;
 }
 

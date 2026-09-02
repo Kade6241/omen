@@ -134,7 +134,6 @@ import { resolveOmniGlyphTransport } from "../services/compression/imageTranspor
 import { stripStore, usesClaudeBridge } from "./chatCore/agentRouterProtocol.ts";
 import { normalizeClaudeToolsForDispatch } from "./chatCore/claudeToolDefaults.ts";
 import {
-  injectSystemPrompt,
   injectCustomSystemPrompt,
   injectSystemPromptPostTranslation,
 } from "../services/systemPrompt.ts";
@@ -651,7 +650,6 @@ export async function handleChatCore({
     };
   };
   let tokensCompressed: number | null = null;
-  body = injectSystemPrompt(body);
   // ── Per-endpoint custom system prompt (port of upstream #2063) ──
   // Reads from cachedSettings if available (passed in from combo/chat layer)
   // to avoid an extra DB read on the hot path. Falls through to getCachedSettings()
@@ -3073,12 +3071,14 @@ export async function handleChatCore({
         isOpencodeClient,
       });
 
-      // Global System Prompt (post-translation) — #3
-      // injectSystemPrompt (line ~498) runs PRE-translation and only handles
-      // messages[]/system, so codex/Responses bodies (input+instructions, no
-      // messages) miss the global prefix/suffix entirely. Re-inject after
-      // translation on the resolved messages[] so codex gets the After Prompt,
-      // with suffix on the LAST system/developer message (highest recency).
+      // Global System Prompt — SINGLE injection point (post-translation).
+      // The pre-translation pass (former chatCore injectSystemPrompt call)
+      // was removed: it chained with this pass to inject prefix/suffix 2-3x
+      // and dual-wrote body.system + messages[] on the claude path, which
+      // strict upstreams (HCP-Vision vLLM: "System message must be at the
+      // beginning") reject with 400. This post-translation pass now handles
+      // all formats — prefix on FIRST system, suffix on LAST (highest
+      // recency), claude `system` field branch, idempotence flag guard.
       bodyToSend = injectSystemPromptPostTranslation(bodyToSend);
 
       updatePendingScope(pendingScope, {
