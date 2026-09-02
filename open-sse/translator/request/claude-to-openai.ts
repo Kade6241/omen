@@ -181,6 +181,9 @@ export function claudeToOpenAIRequest(model, body, stream, credentials: unknown 
         const demoteMidSystem = (out: JsonRecord) => {
           if (out.role === "system" && result.messages.length > 0) out.role = "user";
         };
+        // Array return is tool/user elements only (never role:"system") — a
+        // second system here would skip demotion while result.messages is
+        // still empty and survive as a mid-array system.
         if (Array.isArray(converted)) {
           converted.forEach(demoteMidSystem);
           result.messages.push(...converted);

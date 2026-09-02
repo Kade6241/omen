@@ -18,6 +18,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
+// The bilingual system-append feature rewrites/unshifts the index-0 system
+// message; blank it so role/content assertions are deterministic regardless
+// of the operator environment running the suite.
+delete process.env.OMNIROUTE_SYSTEM_INSTRUCTION_APPEND;
+
 const { claudeToOpenAIRequest } =
   await import("../../open-sse/translator/request/claude-to-openai.ts");
 
