@@ -4,6 +4,7 @@ import { strict as assert } from "node:assert";
 const {
   setSystemPromptConfig,
   injectSystemPromptPostTranslation,
+  injectSystemPromptPreTranslation,
 } = await import("../../open-sse/services/systemPrompt.ts");
 
 const PREFIX = "PREFIX-RULES";
@@ -133,6 +134,116 @@ test("responses-format body without instructions: combined instructions created"
   const body = { model: "m", input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }] };
   const out = injectSystemPromptPostTranslation(body, { targetFormat: "openai-responses" });
   assert.equal(out.instructions, "PREFIX-RULES\n\nSUFFIX-RULES");
+});
+
+// ---- Round 2: gated PRE-translation pass for carrier-less targets ----
+
+// kiro: openai-to-kiro.ts:283-284/872 reads body.messages system roles ONLY
+// (no body.system carrier exists). The gate must write into messages[] exactly
+// once so the translator's <system-reminder> fold carries prefix+suffix once.
+test("pre-translation gate: kiro target gets single messages[] injection", () => {
+  resetConfig();
+  const body = { messages: [{ role: "system", content: "SYS" }, { role: "user", content: "hi" }] };
+  const out = injectSystemPromptPreTranslation(body, { targetFormat: "kiro" });
+  const sysMsg = out.messages.find((m) => m.role === "system");
+  assert.ok(sysMsg, "system message preserved");
+  assert.equal(countOccurrences(String(sysMsg.content), PREFIX), 1);
+  assert.equal(countOccurrences(String(sysMsg.content), SUFFIX), 1);
+});
+
+test("pre-translation gate: kiro target with array system content gets text blocks", () => {
+  resetConfig();
+  const body = {
+    messages: [{ role: "system", content: [{ type: "text", text: "SYS" }] }, { role: "user", content: "hi" }],
+  };
+  const out = injectSystemPromptPreTranslation(body, { targetFormat: "kiro" });
+  const texts = out.messages[0].content.map((c) => c.text).join("|");
+  assert.equal(countOccurrences(texts, "PREFIX-RULES"), 1);
+  assert.equal(countOccurrences(texts, "SUFFIX-RULES"), 1);
+});
+
+test("pre-translation gate: kiro target without system message inserts combined system", () => {
+  resetConfig();
+  const body = { messages: [{ role: "user", content: "hi" }] };
+  const out = injectSystemPromptPreTranslation(body, { targetFormat: "kiro" });
+  assert.equal(out.messages[0].role, "system");
+  assert.equal(countOccurrences(String(out.messages[0].content), PREFIX), 1);
+  assert.equal(countOccurrences(String(out.messages[0].content), SUFFIX), 1);
+});
+
+test("pre-translation gate: idempotent on second application", () => {
+  resetConfig();
+  const body = { messages: [{ role: "system", content: "SYS" }, { role: "user", content: "hi" }] };
+  const once = injectSystemPromptPreTranslation(body, { targetFormat: "kiro" });
+  const twice = injectSystemPromptPreTranslation(once, { targetFormat: "kiro" });
+  assert.equal(twice.messages.length, once.messages.length);
+  assert.equal(countOccurrences(String(twice.messages[0].content), PREFIX), 1);
+});
+
+test("pre-translation gate: does NOT dual-write body.system (kiro reads messages only)", () => {
+  resetConfig();
+  const body = { system: "STRAY", messages: [{ role: "system", content: "SYS" }, { role: "user", content: "hi" }] };
+  const out = injectSystemPromptPreTranslation(body, { targetFormat: "kiro" });
+  assert.equal(out.system, "STRAY", "system field must stay untouched — dual-write would duplicate upstream");
+});
+
+test("pre-translation gate: no-op for carrier-ful targets (openai handled at 3068)", () => {
+  resetConfig();
+  const body = { messages: [{ role: "system", content: "SYS" }, { role: "user", content: "hi" }] };
+  const out = injectSystemPromptPreTranslation(body, { targetFormat: "openai" });
+  assert.equal(countOccurrences(String(out.messages[0].content), PREFIX), 0, "openai must get its injection post-translation, not pre");
+  assert.equal(out.messages[0].content, "SYS");
+});
+
+test("pre-translation gate: no-op when disabled or no prompts configured", () => {
+  setSystemPromptConfig({ enabled: false, prefixPrompt: PREFIX, suffixPrompt: SUFFIX });
+  const body = { messages: [{ role: "user", content: "hi" }] };
+  const out = injectSystemPromptPreTranslation(body, { targetFormat: "kiro" });
+  assert.equal(out.messages.length, 1);
+  setSystemPromptConfig({ enabled: true, prefixPrompt: "", suffixPrompt: "" });
+  const out2 = injectSystemPromptPreTranslation(body, { targetFormat: "kiro" });
+  assert.equal(out2.messages.length, 1);
+  resetConfig();
+});
+
+// antigravity: translator wraps the payload in a Cloud Code envelope and the
+// executor reads ONLY envelope.request (antigravity.ts:733/:417-425) — the
+// envelope rejects unknown top-level fields with 400 (:813-815). A top-level
+// systemInstruction created post-translation would be an invalid field, and
+// envelope.request.systemInstruction is already pinned to
+// ANTIGRAVITY_DEFAULT_SYSTEM (openai-to-gemini.ts:719) — so antigravity must be
+// gated PRE-translation into client messages, same as kiro.
+test("pre-translation gate: antigravity target gets single messages[] injection", () => {
+  resetConfig();
+  const body = { messages: [{ role: "system", content: "SYS" }, { role: "user", content: "hi" }] };
+  const out = injectSystemPromptPreTranslation(body, { targetFormat: "antigravity" });
+  const sysMsg = out.messages.find((m) => m.role === "system");
+  assert.ok(sysMsg, "system message preserved");
+  assert.equal(countOccurrences(String(sysMsg.content), PREFIX), 1);
+  assert.equal(countOccurrences(String(sysMsg.content), SUFFIX), 1);
+});
+
+test("pre-translation gate: antigravity without system message inserts combined", () => {
+  resetConfig();
+  const body = { messages: [{ role: "user", content: "hi" }] };
+  const out = injectSystemPromptPreTranslation(body, { targetFormat: "antigravity" });
+  assert.equal(out.messages[0].role, "system");
+  assert.equal(countOccurrences(String(out.messages[0].content), PREFIX), 1);
+  assert.equal(countOccurrences(String(out.messages[0].content), SUFFIX), 1);
+});
+
+test("gemini branch: antigravity envelope must NOT get a top-level systemInstruction created", () => {
+  resetConfig();
+  // 3068 receives the envelope itself for antigravity; the gemini branch must
+  // not fabricate an invalid top-level systemInstruction on it.
+  const body = {
+    project: "p",
+    requestId: "r",
+    request: { contents: [{ role: "user", parts: [{ text: "hi" }] }] },
+  };
+  const out = injectSystemPromptPostTranslation(body, { targetFormat: "antigravity" });
+  assert.equal(out.systemInstruction, undefined, "no invalid top-level systemInstruction on a Cloud Code envelope");
+  assert.equal(out.messages, undefined, "envelope has no messages to mutate");
 });
 
 // M3: reset config so this file's settings never leak into other test files.

@@ -136,6 +136,7 @@ import { normalizeClaudeToolsForDispatch } from "./chatCore/claudeToolDefaults.t
 import {
   injectCustomSystemPrompt,
   injectSystemPromptPostTranslation,
+  injectSystemPromptPreTranslation,
 } from "../services/systemPrompt.ts";
 import { translateRequest, needsTranslation } from "../translator/index.ts";
 import { FORMATS } from "../translator/formats.ts";
@@ -2487,6 +2488,12 @@ export async function handleChatCore({
         model || "",
         sourceFormat
       );
+      // Carrier-less targets (kiro / antigravity) have no post-translation
+      // system carrier for the single pass at ~3068 to write into — inject
+      // into the client body BEFORE translation so their user-merge /
+      // relocation paths carry the global prompt (baseline coverage of the
+      // removed pre-translation pass). The gate writes ONE carrier only.
+      translatedBody = injectSystemPromptPreTranslation(translatedBody, { targetFormat });
       translatedBody = translateRequest(
         sourceFormat,
         targetFormat,
@@ -3071,14 +3078,17 @@ export async function handleChatCore({
         isOpencodeClient,
       });
 
-      // Global System Prompt — SINGLE injection point (post-translation).
-      // The pre-translation pass (former chatCore injectSystemPrompt call)
-      // was removed: it chained with this pass to inject prefix/suffix 2-3x
-      // and dual-wrote body.system + messages[] on the claude path, which
-      // strict upstreams (HCP-Vision vLLM: "System message must be at the
-      // beginning") reject with 400. Format-aware via targetFormat: messages[]
-      // (openai/codex — prefix FIRST system, suffix LAST), claude `system`
-      // field, gemini `systemInstruction`, responses `instructions`.
+      // Global System Prompt — SINGLE injection point (post-translation) for
+      // carrier-ful targets. The old unconditional pre-translation pass
+      // (former chatCore injectSystemPrompt call) was removed: it chained
+      // with this pass to inject prefix/suffix 2-3x and dual-wrote
+      // body.system + messages[] on the claude path, which strict upstreams
+      // (HCP-Vision vLLM: "System message must be at the beginning") reject
+      // with 400. Format-aware via targetFormat: messages[] (openai/codex —
+      // prefix FIRST system, suffix LAST), claude `system` field, gemini
+      // `systemInstruction`, responses `instructions`. Carrier-less targets
+      // (kiro user-fold, antigravity Cloud Code envelope) are covered by the
+      // gated PRE-translation pass before translateRequest instead.
       bodyToSend = injectSystemPromptPostTranslation(bodyToSend, { targetFormat });
 
       updatePendingScope(pendingScope, {

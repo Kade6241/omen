@@ -248,7 +248,11 @@ export function injectSystemPromptPostTranslation(body, opts?: { targetFormat?: 
   // parts: [{ text }] }, see translator/request/claude-to-gemini.ts:95). If
   // absent, create it — a messages-less gemini body previously fell through
   // the messages[] early-return and silently got zero injection.
-  if (targetFormat === "gemini") {
+  // Antigravity reaches 3068 as a Cloud Code envelope whose executor reads
+  // ONLY envelope.request (antigravity.ts:733) and which rejects unknown
+  // top-level fields with 400 (:813-815) — its coverage is restored by the
+  // gated pre-translation pass instead, so it must stay out of this branch.
+  if (targetFormat === "gemini" && !result.request) {
     if (result.systemInstruction && typeof result.systemInstruction === "object") {
       const si = result.systemInstruction as { role?: string; parts?: unknown[] };
       const parts = Array.isArray(si.parts) ? [...si.parts] : [];
@@ -314,6 +318,86 @@ export function injectSystemPromptPostTranslation(body, opts?: { targetFormat?: 
     appendToContent(result.messages[lastIdx] as Record<string, unknown>, suffix);
   }
   markInjected(result);
+  return result;
+}
+
+/**
+ * Gated PRE-translation injection for targets with NO post-translation system
+ * carrier. Two such targets exist:
+ *   - kiro: openai-to-kiro.ts folds system messages into user turns wrapped in
+ *     <system-reminder> tags (#2306) — reads body.messages system roles only
+ *     (:283-284/:872), no body.system, no system slot in the Kiro payload.
+ *   - antigravity: the translator wraps the payload in a Cloud Code envelope
+ *     ({project, requestId, request:{contents, systemInstruction, ...}}) and
+ *     the executor reads ONLY envelope.request (antigravity.ts:733/:417-425);
+ *     the envelope rejects unknown top-level fields with 400 (:813-815), and
+ *     envelope.request.systemInstruction is overwritten with
+ *     ANTIGRAVITY_DEFAULT_SYSTEM after relocating client system content into
+ *     the first user message (openai-to-gemini.ts:716-730). Post-translation
+ *     injection at chatCore 3068 cannot reach the real carrier for either.
+ *
+ * Pre-translation the client body is always messages- or system-field-based,
+ * so injecting here restores the coverage the removed chatCore pre-translation
+ * pass used to provide — folded into the target's user-merge/relocation paths.
+ *
+ * SINGLE-CARRIER guarantee: writes into exactly ONE carrier (messages[]
+ * system/developer role, else body.system for claude-format client bodies,
+ * else a combined system message) — never both. The removed pass dual-wrote
+ * messages[] AND body.system; both would survive translation and fold ×2.
+ *
+ * @param {object} body - PRE-translation request body (client format)
+ * @param {object} [opts] - `{ targetFormat }` of the resolved wire target
+ * @returns {object} Modified body (or the original when gated out)
+ */
+export function injectSystemPromptPreTranslation(body, opts?: { targetFormat?: string }) {
+  const cfg = getConfig();
+  if (!cfg.enabled) return body;
+  const prefix = cfg.prefixPrompt || "";
+  const suffix = cfg.suffixPrompt || "";
+  if (!prefix && !suffix) return body;
+  if (!body || typeof body !== "object") return body;
+  if (body._skipSystemPrompt) return body;
+  if (body._systemPromptInjected) return body;
+
+  const targetFormat = opts?.targetFormat || "";
+  // Carrier-ful targets (openai, codex, claude, gemini, openai-responses,
+  // cursor) receive their injection at the single post-translation pass
+  // (chatCore 3068) — pre-injecting here would chain into a double injection.
+  const CARRIERLESS_TARGETS = new Set(["kiro", "antigravity"]);
+  if (!CARRIERLESS_TARGETS.has(targetFormat)) return body;
+
+  const result = { ...body };
+
+  // OpenAI-style client body: write into the system/developer message only.
+  if (Array.isArray(result.messages)) {
+    result.messages = [...result.messages];
+    const sysIdx = result.messages.findIndex(
+      (m) => m && (m.role === "system" || m.role === "developer")
+    );
+    if (sysIdx >= 0) {
+      result.messages[sysIdx] = { ...result.messages[sysIdx] };
+      if (prefix) prependToContent(result.messages[sysIdx] as Record<string, unknown>, prefix);
+      if (suffix) appendToContent(result.messages[sysIdx] as Record<string, unknown>, suffix);
+    } else {
+      const combined = [prefix, suffix].filter(Boolean).join("\n\n");
+      if (combined) {
+        result.messages = [{ role: "system", content: combined }, ...result.messages];
+      }
+    }
+    markInjected(result);
+    return result;
+  }
+
+  // Claude-format client body (separate `system` field, no system-role
+  // message): single write into body.system — translation promotes it to the
+  // system message the target then folds. Never write both carriers.
+  if (typeof result.system === "string") {
+    let sys = result.system;
+    if (prefix) sys = prefix + "\n\n" + sys;
+    if (suffix) sys = sys + "\n\n" + suffix;
+    result.system = sys;
+    markInjected(result);
+  }
   return result;
 }
 
