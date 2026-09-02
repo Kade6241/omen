@@ -36,6 +36,18 @@ export const githubProvider: RegistryEntry = {
   // messagesUrl (/v1/messages) instead of /chat/completions. Port of
   // decolua/9router#2608 (author: yidecode) — see executors/github.ts.
   models: [
+    // Virtual model for Copilot Free / Student accounts (auto model selection only).
+    // GitHub does not expose the actual model selection to users on these plans.
+    // OmniRoute maps this to gpt-4o-2024-11-20 upstream (the historical default)
+    // but makes no guarantee about which model GitHub actually uses.
+    // See: docs.github.com/en/copilot/about-github-copilot/subscription-plans-for-github-copilot
+    // (accessed 2026-09-02): "Copilot Free: Auto model selection only".
+    {
+      id: "copilot-auto",
+      name: "Copilot (auto select)",
+      contextLength: 128000,
+      maxOutputTokens: 16384,
+    },
     {
       id: "claude-fable-5",
       name: "Claude Fable 5",
