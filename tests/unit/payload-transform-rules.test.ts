@@ -34,8 +34,14 @@ test("transform: append op appends string value to existing string path", () => 
   assert.equal(applied.length, 1);
   assert.equal(applied[0].type, "transform");
   assert.equal(applied[0].path, "messages.0.content");
-  // audit summary carries lengths, not content
-  assert.equal(JSON.stringify(applied[0]).includes("BE-SAFE"), false);
+  // audit entry carries a bounded snippet for the trace diff, never the full content
+  const entryJson = JSON.stringify(applied[0]);
+  const entryValue = applied[0].value as { beforeSnippet?: string; afterSnippet?: string; before?: number; after?: number };
+  assert.ok(entryJson.includes("BE-SAFE"), "snippet should carry the changed region");
+  assert.ok((entryValue.beforeSnippet ?? "").length <= 240);
+  assert.ok((entryValue.afterSnippet ?? "").length <= 240);
+  assert.equal(entryValue.before, 2);
+  assert.equal(entryValue.after, 10);
 });
 
 test("transform: prepend op prepends to existing string path", () => {

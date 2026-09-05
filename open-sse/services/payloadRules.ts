@@ -468,10 +468,26 @@ export function resolvePayloadRuleProtocols({
   return [...protocols];
 }
 
+const TRANSFORM_SNIPPET_LIMIT = 200;
+
+function snippetAroundChange(before: string, after: string): { beforeSnippet: string; afterSnippet: string } | null {
+  // Find first differing index, then back off for context.
+  let start = 0;
+  const minLen = Math.min(before.length, after.length);
+  while (start < minLen && before[start] === after[start]) start++;
+  // Back off for context, including the pure-append case where the first
+  // difference sits at (or beyond) the end of the shorter string.
+  start = Math.max(0, start - 40);
+  return {
+    beforeSnippet: before.slice(start, start + TRANSFORM_SNIPPET_LIMIT),
+    afterSnippet: after.slice(start, start + TRANSFORM_SNIPPET_LIMIT),
+  };
+}
+
 function applyTransformOp(
   payload: JsonRecord,
   op: PayloadTransformOp
-): { path: string; before: number; after: number } | null {
+): { path: string; before: number; after: number; beforeSnippet: string; afterSnippet: string } | null {
   const current = getValueAtPath(payload, op.path);
   if (typeof current !== "string") return null;
 
@@ -483,7 +499,14 @@ function applyTransformOp(
 
   if (next === current) return null;
   setValueAtPath(payload, op.path, next);
-  return { path: op.path, before: current.length, after: next.length };
+  const snippet = snippetAroundChange(current, next);
+  return {
+    path: op.path,
+    before: current.length,
+    after: next.length,
+    beforeSnippet: snippet?.beforeSnippet ?? "",
+    afterSnippet: snippet?.afterSnippet ?? "",
+  };
 }
 
 export function applyPayloadRules(
@@ -533,7 +556,7 @@ export function applyPayloadRules(
       applied.push({
         type: "transform",
         path: result.path,
-        value: { op: op.op, before: result.before, after: result.after },
+        value: { op: op.op, before: result.before, after: result.after, beforeSnippet: result.beforeSnippet, afterSnippet: result.afterSnippet },
       });
     }
   }

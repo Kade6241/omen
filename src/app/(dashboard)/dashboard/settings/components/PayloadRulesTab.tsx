@@ -9,6 +9,7 @@ const EMPTY_PAYLOAD_RULES_TEMPLATE = {
   override: [],
   filter: [],
   defaultRaw: [],
+  transform: [],
 };
 
 const EMPTY_PAYLOAD_RULES_TEXT = JSON.stringify(EMPTY_PAYLOAD_RULES_TEMPLATE, null, 2);
@@ -100,6 +101,7 @@ export default function PayloadRulesTab() {
       override: getRuleSectionCount(source, ["override"]),
       filter: getRuleSectionCount(source, ["filter"]),
       defaultRaw: getRuleSectionCount(source, ["defaultRaw", "default-raw"]),
+      transform: getRuleSectionCount(source, ["transform"]),
     };
   }, [parsedEditor.value]);
 
@@ -200,6 +202,10 @@ export default function PayloadRulesTab() {
             <p className="text-sm font-medium">{t("payloadRuleDefaultRawTitle")}</p>
             <p className="text-xs text-text-muted mt-1">{t("payloadRuleDefaultRawDesc")}</p>
           </div>
+          <div className="rounded-lg border border-border bg-bg-secondary/40 p-3">
+            <p className="text-sm font-medium">{t("payloadRuleTransformTitle")}</p>
+            <p className="text-xs text-text-muted mt-1">{t("payloadRuleTransformDesc")}</p>
+          </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2 text-xs text-text-muted">
@@ -214,6 +220,9 @@ export default function PayloadRulesTab() {
           </span>
           <span className="rounded-full border border-border px-2.5 py-1">
             {t("payloadRuleDefaultRawTitle")}: {summary.defaultRaw}
+          </span>
+          <span className="rounded-full border border-border px-2.5 py-1">
+            {t("payloadRuleTransformTitle")}: {summary.transform}
           </span>
         </div>
 

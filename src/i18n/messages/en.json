@@ -8332,7 +8332,9 @@
     "cliproxyapiHealth": "Health",
     "cliproxyapiPort": "Port",
     "qdrantHost": "Host",
-    "qdrantCollection": "Collection"
+    "qdrantCollection": "Collection",
+    "payloadRuleTransformTitle": "transform",
+    "payloadRuleTransformDesc": "Deterministic string ops (append/prepend/replace/regex) on payload paths for matched models. Only logged ops that changed the value."
   },
   "contextRtk": {
     "title": "RTK Engine",
