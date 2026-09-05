@@ -174,6 +174,12 @@ export interface NonStreamingClientTranslateInput {
   provider: string;
   model: string;
   requestBody: Record<string, unknown>;
+  /**
+   * Transcript used for no-tool_calls reasoning replay (#1628).
+   * Must be the client-translated Chat `messages` (parent: `translatedBody.messages`),
+   * not `finalBody` — Responses-shaped `finalBody` has `input`, not `messages`.
+   */
+  historyMessages?: unknown[] | null;
   responseToolNameMap: Map<string, string> | null;
   requestToolIdentityMap: Map<string, { namespace?: string; name: string }> | null;
   reasoningCacheScope: string | null;
