@@ -9,6 +9,17 @@ import {
 } from "@omniroute/open-sse/utils/earlyStreamKeepalive";
 import { resolveKeepaliveThreshold } from "@omniroute/open-sse/utils/keepaliveThreshold";
 import { resolveStreamFlag } from "@omniroute/open-sse/utils/aiSdkCompat";
+import {
+  getBifrostRoutingConfig,
+  resolveRelayRoutingBackend,
+  shouldTryBifrostForRequest,
+  getActiveBifrostCooldown,
+  recordBifrostFailure,
+  clearBifrostFailure,
+  getRoutingFallbackHeader,
+  getRoutingFallbackReasonHeader,
+} from "@/shared/services/bifrost/bifrostRouting.ts";
+import { dispatchToBifrost } from "@/shared/services/bifrost/bifrostClient.ts";
 
 let initialized = false;
 
@@ -69,14 +80,74 @@ async function postHandler(request: any, context: any, preParsedBody: any = null
   }
   const accept = String(request.headers?.get?.("accept") || "");
   const wantsStreaming = resolveStreamFlag(body?.stream, accept, "claude");
-  if (wantsStreaming) {
-    return await withEarlyStreamKeepalive(handleChat(request, null, body), {
-      signal: request.signal,
-      thresholdMs: resolveKeepaliveThreshold(body?.model),
-      keepaliveFrame: ANTHROPIC_PING_FRAME,
-    });
+
+  // Bifrost Go sidecar fast-path routing check
+  const relayBackend = resolveRelayRoutingBackend();
+  const bifrostConfig = getBifrostRoutingConfig();
+  let fallbackHeaderValue: string | undefined = undefined;
+
+  if (body && typeof body === "object" && bifrostConfig) {
+    const bifrostDecision = shouldTryBifrostForRequest(
+      relayBackend,
+      bifrostConfig,
+      body
+    );
+
+    if (bifrostDecision.tryBifrost) {
+      const cooldown =
+        relayBackend === "auto" ? getActiveBifrostCooldown(bifrostConfig.baseUrl) : null;
+      if (cooldown) {
+        fallbackHeaderValue = `bifrost-cooldown; remaining=${cooldown.remainingMs}`;
+      } else {
+        try {
+          const bifrostResult = await dispatchToBifrost({
+            request,
+            body: body as Record<string, unknown>,
+            config: bifrostConfig,
+          });
+
+          if (bifrostResult.statusCode < 500) {
+            clearBifrostFailure(bifrostConfig.baseUrl);
+            return bifrostResult.response;
+          }
+
+          recordBifrostFailure(bifrostConfig.baseUrl, `http_${bifrostResult.statusCode}`);
+          fallbackHeaderValue = "bifrost-error";
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          recordBifrostFailure(bifrostConfig.baseUrl, message);
+          fallbackHeaderValue = "bifrost-error";
+        }
+      }
+    }
   }
-  return await handleChat(request, null, body);
+
+  const applyFallbackHeaders = (res: Response) => {
+    if (!bifrostConfig) return res;
+    const fallbackHeader = getRoutingFallbackHeader(relayBackend, bifrostConfig);
+    if (fallbackHeader || fallbackHeaderValue) {
+      res.headers.set(
+        "X-Routing-Fallback",
+        fallbackHeaderValue || fallbackHeader || "bifrost"
+      );
+      const reasonCode = getRoutingFallbackReasonHeader(fallbackHeaderValue);
+      if (reasonCode) {
+        res.headers.set("X-Routing-Fallback-Reason", reasonCode);
+      }
+    }
+    return res;
+  };
+
+  if (wantsStreaming) {
+    return applyFallbackHeaders(
+      await withEarlyStreamKeepalive(handleChat(request, null, body), {
+        signal: request.signal,
+        thresholdMs: resolveKeepaliveThreshold(body?.model),
+        keepaliveFrame: ANTHROPIC_PING_FRAME,
+      })
+    );
+  }
+  return applyFallbackHeaders(await handleChat(request, null, body));
 }
 
 // `logger: null` — the guardrail registry re-evaluates this request inside
