@@ -40,7 +40,7 @@ export function parseCatalogPage(request: Request): CatalogPage {
 }
 
 export function catalogPageCacheKey(page: CatalogPage): string {
-  return `${page.after ?? ""}|${page.limit ?? ""}`;
+  return `after=${page.after ?? ""};limit=${page.limit ?? ""}`;
 }
 
 export function applyCatalogPage<T extends { id?: unknown }>(
