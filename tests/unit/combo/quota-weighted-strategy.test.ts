@@ -1013,3 +1013,50 @@ test("two pipelines starting together do not both land on the same idle account"
   left.quotaShareRelease?.();
   right.quotaShareRelease?.();
 });
+
+test("quota-share sticky pin transfers the inflight slot to the pinned account", async () => {
+  const provider = "anthropic";
+  const model = "claude-sonnet-4-5";
+  const drawn = `drawn-${randomUUID()}`;
+  const pinned = `pinned-${randomUUID()}`;
+  healthyStickiness();
+  const messages = [{ role: "user", content: `qs-sticky-${randomUUID()}` }];
+  const comboName = `qtSd/qs-sticky-${randomUUID()}`;
+  const probe = await applySessionStickiness(
+    [makeTarget(provider, drawn, model), makeTarget(provider, pinned, model)],
+    messages,
+    comboName
+  );
+  assert.ok(probe.messageHash);
+  recordStickyBinding(probe.messageHash, pinned, comboName);
+  const result = await resolveComboTargetPipeline({
+    body: { messages, model: `${provider}/${model}` },
+    combo: {
+      id: comboName,
+      name: comboName,
+      models: pinComboModels(provider, model, [drawn, pinned]),
+      config: {},
+    },
+    strategy: "quota-share",
+    config: {},
+    settings: null,
+    allCombos: null,
+    relayOptions: null,
+    signal: null,
+    apiKeyAllowedConnections: null,
+    log: pipelineLog,
+    resilienceSettings: { providerCooldown: { enabled: false } },
+    isModelAvailable: undefined,
+    handleSingleModelWithTimeout: async () => new Response("{}"),
+    buildAutoCandidates: async () => [],
+  });
+  assert.equal("earlyResponse" in result, false);
+  if ("earlyResponse" in result) return;
+  assert.equal(result.sticky.stuck, true);
+  assert.equal(result.orderedTargets[0]?.connectionId, pinned);
+  assert.equal(getInflight(drawn), 0, "drawn account must drop the slot after stickiness moves [0]");
+  assert.equal(getInflight(pinned), 1, "pinned account must hold the transferred slot");
+  result.quotaShareRelease?.();
+  assert.equal(getInflight(pinned), 0);
+  assert.equal(getInflight(drawn), 0);
+});

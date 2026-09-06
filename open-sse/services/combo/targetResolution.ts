@@ -127,10 +127,10 @@ export interface ResolvedComboTargetPipeline {
   /**
    * Idempotent release for the in-flight slot reserved for the winner.
    * Non-null for `quota-share` (reserved inside selectQuotaShareTarget) and for
-   * `quota-weighted` (reserved in the orderer on the draw, then transferred here
-   * if stickiness/cache moves [0]). The host MUST invoke it when the request
-   * settles; this pipeline already releases it on any earlyResponse it produces
-   * after selection.
+   * `quota-weighted` (reserved in the orderer on the draw). Stickiness/cache may
+   * still move [0]; this pipeline transfers the slot onto the dispatched account
+   * for both strategies. The host MUST invoke it when the request settles; this
+   * pipeline already releases it on any earlyResponse it produces after selection.
    */
   quotaShareRelease: (() => void) | null;
 }
@@ -768,13 +768,14 @@ export async function resolveComboTargetPipeline(
     autoUsedExplicitRouter
   );
 
-  // quota-weighted already reserved the draw inside the orderer (same
-  // synchronous turn as the pick) so two in-process pipelines cannot both
-  // see inflight=0. Stickiness / prompt-cache may still move [0]; transfer
-  // the slot so the reserved account is the one that will be dispatched.
-  // quota-share reserved inside selectQuotaShareTarget and must not be
-  // double-counted or stolen by this transfer.
-  if (strategy === "quota-weighted") {
+  // quota-weighted reserves the draw inside the orderer (same synchronous
+  // turn as the pick). quota-share reserves inside selectQuotaShareTarget.
+  // Stickiness / prompt-cache may still move [0]; transfer the slot so the
+  // reserved account is the one that will be dispatched. The empty-id
+  // fallback (drawn target had no connectionId, later filters put a real
+  // id in [0]) is quota-weighted only — quota-share always hands back a
+  // release, even a no-op, and inventing a slot here would double-count.
+  if (strategy === "quota-weighted" || strategy === "quota-share") {
     const finalId = orderedTargets[0]?.connectionId ?? "";
     if (quotaShareRelease && drawnId && finalId && finalId !== drawnId) {
       quotaShareRelease();
@@ -785,7 +786,7 @@ export async function resolveComboTargetPipeline(
         released = true;
         decrementInflight(finalId);
       };
-    } else if (!quotaShareRelease && finalId) {
+    } else if (strategy === "quota-weighted" && !quotaShareRelease && finalId) {
       incrementInflight(finalId);
       let released = false;
       quotaShareRelease = () => {

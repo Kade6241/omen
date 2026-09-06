@@ -29,7 +29,7 @@ import type { ComboLike, ComboLogger, ResolvedComboTarget } from "./types.ts";
  * quota-share and quota-weighted reserve for their winner. quota-share reserves
  * inside selectQuotaShareTarget; quota-weighted reserves inside the orderer so
  * two in-process draws cannot both see inflight=0. Stickiness may then move [0];
- * resolveComboTargetPipeline transfers the slot when that happens. The caller
+ * resolveComboTargetPipeline transfers the slot for both strategies. The caller
  * MUST invoke the callback exactly once when the request settles — dropping it
  * leaks the counter and degenerates later draws toward whoever looks idle.
  */
