@@ -85,6 +85,22 @@ function oneResetTokenResponse(): Response {
   });
 }
 
+/** Live X500 hotmail shape: nested fields 10/20/30, timestamps length-delimited. */
+function liveResetTokenResponse(): Response {
+  const timestamp = (unixSeconds: number) => encodeVarintField(1, unixSeconds);
+  const token = Buffer.concat([
+    encodeLengthDelimited(10, Buffer.from("test-token-id", "utf8")),
+    encodeLengthDelimited(20, timestamp(1786560540)),
+    encodeLengthDelimited(30, timestamp(1789238940)),
+  ]);
+  const payload = encodeLengthDelimited(10, token);
+  const trailer = Buffer.from("grpc-status:0\r\n", "utf8");
+  return new Response(Buffer.concat([grpcFrame(0x00, payload), grpcFrame(0x80, trailer)]), {
+    status: 200,
+    headers: { "content-type": "application/grpc-web+proto" },
+  });
+}
+
 function successFixtures(
   options: {
     tier?: unknown;
@@ -631,6 +647,17 @@ test("grok-cli surfaces bankedResetCredits when GetRemainingResets returns one t
   const usage = await getUsage((async (input: string | URL | Request) => {
     const url = String(input);
     if (url.includes("GetRemainingResets")) return oneResetTokenResponse();
+    return fixtureFetch(input);
+  }) as typeof fetch);
+  assert.equal(usage.bankedResetCredits, 1);
+  assert.ok(usage.quotas?.weekly);
+});
+
+test("grok-cli surfaces bankedResetCredits for live nested 10/20/30 tokens", async () => {
+  const fixtureFetch = successFixtures();
+  const usage = await getUsage((async (input: string | URL | Request) => {
+    const url = String(input);
+    if (url.includes("GetRemainingResets")) return liveResetTokenResponse();
     return fixtureFetch(input);
   }) as typeof fetch);
   assert.equal(usage.bankedResetCredits, 1);

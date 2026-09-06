@@ -2,11 +2,12 @@
  * grokResetCreditsFrame.ts — gRPC-web decoder for
  * `prod_mc_billing.ConsumerUiSvc/GetRemainingResets`.
  *
- * Live shape (X500, 2026-09-05): empty DATA + grpc-status 0 = inventory 0;
- * otherwise repeated top-level field 10, each a ConsumerResetToken:
- *   field 1 (bytes) token id — server-side redeem only, never logged
- *   field 2 (varint) granted unix seconds
- *   field 3 (varint) expires unix seconds
+ * Live shape (X500, 2026-09-06 hotmail SuperGrokPro): empty DATA +
+ * grpc-status 0 = inventory 0; otherwise repeated top-level field 10,
+ * each a ConsumerResetToken. Nested numbers are 10 / 20 / 30, all
+ * length-delimited (id 13B string, granted/expires google.protobuf.Timestamp
+ * with seconds in field 1). Compact 1 / 2 / 3 (id bytes, granted/expires
+ * varint unix seconds) is still accepted. Token ids stay server-side.
  *
  * Do not reuse grokCliQuotaFrame.decodeFields: that Map last-wins and
  * would collapse repeated field 10 to a single token.
@@ -21,8 +22,13 @@ const GRPC_WEB_TRAILER_FLAG_BIT = 0x80;
 const MAX_VARINT_SHIFT_BITS = 70n;
 
 const FIELD_RESET_TOKEN = 10;
-const TOKEN_FIELD_ID = 1;
-const TOKEN_FIELD_EXPIRES = 3;
+/** Compact 1/2/3 (varint seconds) and live 10/20/30 (id + Timestamp). */
+const TOKEN_NESTED_FIELDS = {
+  id: [1, 10],
+  granted: [2, 20],
+  expires: [3, 30],
+} as const;
+const TIMESTAMP_FIELD_SECONDS = 1;
 const REDEEM_REQUEST_TOKEN_ID_FIELD = 10;
 
 type ProtoField =
@@ -231,19 +237,36 @@ function splitFrames(buffer: Buffer): {
   return { dataPayload, sawData, trailerStatus };
 }
 
-function tokenExpiresAtMs(tokenFields: TaggedField[]): number | null {
-  const expires = tokenFields.find(
-    (field) => field.fieldNumber === TOKEN_FIELD_EXPIRES && field.field.wireType === WIRE_TYPE_VARINT
+function timestampSeconds(field: ProtoField): number | null {
+  if (field.wireType === WIRE_TYPE_VARINT) {
+    return Number.isFinite(field.value) ? field.value : null;
+  }
+  if (field.wireType !== WIRE_TYPE_LENGTH_DELIMITED) return null;
+  const nested = walkFields(field.bytes);
+  if (!nested) return null;
+  const seconds = nested.find(
+    (item) => item.fieldNumber === TIMESTAMP_FIELD_SECONDS && item.field.wireType === WIRE_TYPE_VARINT
   );
-  if (!expires || expires.field.wireType !== WIRE_TYPE_VARINT) return null;
-  if (!Number.isFinite(expires.field.value)) return null;
-  return expires.field.value * 1000;
+  if (!seconds || seconds.field.wireType !== WIRE_TYPE_VARINT) return null;
+  return Number.isFinite(seconds.field.value) ? seconds.field.value : null;
+}
+
+function hasFieldNumber(field: TaggedField, numbers: readonly number[]): boolean {
+  return (numbers as readonly number[]).includes(field.fieldNumber);
+}
+
+function tokenExpiresAtMs(tokenFields: TaggedField[]): number | null {
+  const expires = tokenFields.find((field) => hasFieldNumber(field, TOKEN_NESTED_FIELDS.expires));
+  if (!expires) return null;
+  const seconds = timestampSeconds(expires.field);
+  return seconds === null ? null : seconds * 1000;
 }
 
 function tokenIdFromFields(tokenFields: TaggedField[]): string | null {
   const id = tokenFields.find(
     (field) =>
-      field.fieldNumber === TOKEN_FIELD_ID && field.field.wireType === WIRE_TYPE_LENGTH_DELIMITED
+      hasFieldNumber(field, TOKEN_NESTED_FIELDS.id) &&
+      field.field.wireType === WIRE_TYPE_LENGTH_DELIMITED
   );
   if (!id || id.field.wireType !== WIRE_TYPE_LENGTH_DELIMITED) return null;
   const tokenId = id.field.bytes.toString("utf8").trim();

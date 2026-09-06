@@ -41,6 +41,24 @@ function encodeToken(id: string, granted: number, expires: number): Buffer {
   ]);
 }
 
+/** google.protobuf.Timestamp with seconds only (nanos omitted). Live inner length is 6. */
+function encodeTimestampSeconds(unixSeconds: number): Buffer {
+  return encodeVarintField(1, unixSeconds);
+}
+
+/**
+ * X500 2026-09-06 hotmail SuperGrokPro GetRemainingResets DATA:
+ * top field 10, nested fields 10/20/30 all length-delimited
+ * (id 13B, granted Timestamp 6B, expires Timestamp 6B).
+ */
+function encodeLiveToken(id: string, granted: number, expires: number): Buffer {
+  return Buffer.concat([
+    encodeLengthDelimited(10, Buffer.from(id, "utf8")),
+    encodeLengthDelimited(20, encodeTimestampSeconds(granted)),
+    encodeLengthDelimited(30, encodeTimestampSeconds(expires)),
+  ]);
+}
+
 function frameData(payload: Buffer): Buffer {
   const header = Buffer.alloc(5);
   header[0] = 0x00;
@@ -136,6 +154,31 @@ test("13-byte token id is a string, not a nested protobuf message", () => {
   assert.equal(decoded.snapshot.count, 1);
   assert.equal(decoded.tokens[0]?.tokenId, TOKEN_ID);
   assert.equal(decoded.tokens[0]?.tokenId.length, 13);
+});
+
+test("live nested fields 10/20/30 are not malformed", () => {
+  const liveInner = encodeLiveToken(TOKEN_ID, GRANTED, EXPIRES);
+  assert.equal(encodeTimestampSeconds(GRANTED).length, 6);
+  assert.equal(encodeTimestampSeconds(EXPIRES).length, 6);
+  const payload = encodeLengthDelimited(10, liveInner);
+  const decoded = decodeGrokResetCreditsFrame(Buffer.concat([frameData(payload), frameTrailer()]));
+  assert.equal(decoded.ok, true);
+  if (!decoded.ok) return;
+  assert.equal(decoded.snapshot.count, 1);
+  assert.equal(decoded.tokens[0]?.tokenId, TOKEN_ID);
+  assert.equal(decoded.tokens[0]?.expiresAt, new Date(EXPIRES * 1000).toISOString());
+});
+
+test("live nested field-30 expiry still drops expired cards", () => {
+  const expired = encodeLengthDelimited(10, encodeLiveToken("test-token-ex", GRANTED, 1_700_000_000));
+  const live = encodeLengthDelimited(10, encodeLiveToken(TOKEN_ID, GRANTED, EXPIRES));
+  const decoded = decodeGrokResetCreditsFrame(
+    Buffer.concat([frameData(Buffer.concat([expired, live])), frameTrailer()])
+  );
+  assert.equal(decoded.ok, true);
+  if (!decoded.ok) return;
+  assert.equal(decoded.snapshot.count, 1);
+  assert.equal(decoded.tokens[0]?.tokenId, TOKEN_ID);
 });
 
 test("RedeemReset request encodes token_id as protobuf field 10", () => {
