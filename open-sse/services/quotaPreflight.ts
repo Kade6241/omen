@@ -21,6 +21,7 @@
 import { isCompatibleProviderConnectionId } from "@/shared/utils/compatibleProviderId";
 import { isFeatureFlagEnabled } from "@/shared/utils/featureFlags";
 import { fetchNewApiAggregatorQuota } from "./newApiAggregatorQuotaFetcher.ts";
+import { resolveUsageAdapter } from "./usage/adapter.ts";
 
 export interface PreflightQuotaResult {
   proceed: boolean;
@@ -95,6 +96,16 @@ export function registerQuotaFetcher(provider: string, fetcher: QuotaFetcher): v
 
 export function getQuotaFetcher(provider: string): QuotaFetcher | undefined {
   return quotaFetcherRegistry.get(provider) || quotaFetcherRegistry.get(provider.toLowerCase());
+}
+
+export function resolveQuotaFetcher(
+  provider: string,
+  connection?: Record<string, unknown>
+): QuotaFetcher | undefined {
+  return (
+    getQuotaFetcher(provider) ||
+    (connection ? getQuotaFetcher(resolveUsageAdapter(connection) || "") : undefined)
+  );
 }
 
 export function isQuotaPreflightEnabled(connection: Record<string, unknown>): boolean {
@@ -266,7 +277,7 @@ export async function preflightQuota(
 ): Promise<PreflightQuotaResult> {
   // No legacy enable-flag gate here — the caller decides when to invoke us
   // (see file-level docstring). When there's no fetcher we proceed silently.
-  let fetcher = getQuotaFetcher(provider);
+  let fetcher = resolveQuotaFetcher(provider, connection);
   if (!fetcher) {
     // Dynamic fallback: for compatible-provider connections with the
     // aggregator flag + feature flag, use the generalized New-API fetcher.

@@ -22,7 +22,8 @@ import {
 import { isConnectionUnavailableToAuxiliaryActivity } from "@/lib/exclusiveLeaseIsolation";
 import { clearRecoveredProviderState } from "@/sse/services/auth";
 import { getMachineId } from "@/shared/utils/machine";
-import { USAGE_SUPPORTED_PROVIDERS } from "@/shared/constants/providers";
+import { supportsProviderQuota } from "@/shared/utils/providerQuotaVisibility";
+import { isDarioUsageConnection } from "@omniroute/open-sse/services/usage/adapter.ts";
 import { mergeProviderLimitsCacheEntry, toProviderLimitsCacheEntry } from "./providerLimitsCache";
 import { getExecutor } from "@omniroute/open-sse/executors/index.ts";
 import { getUsageForProvider } from "@omniroute/open-sse/services/usage.ts";
@@ -195,18 +196,14 @@ function shouldRefreshProviderLimitsCache(
 }
 
 export function isSupportedUsageConnection(connection: ProviderConnectionLike | null): boolean {
-  if (
-    !connection ||
-    !connection.provider ||
-    !USAGE_SUPPORTED_PROVIDERS.includes(connection.provider)
-  ) {
+  if (!connection?.provider || !supportsProviderQuota(connection.provider, connection))
     return false;
-  }
 
   if (connection.authType === "oauth") return true;
   return (
     (connection.authType === "apikey" || connection.authType === "api_key") &&
-    PROVIDER_LIMITS_APIKEY_PROVIDERS.has(connection.provider)
+    (PROVIDER_LIMITS_APIKEY_PROVIDERS.has(connection.provider) ||
+      isDarioUsageConnection(connection))
   );
 }
 

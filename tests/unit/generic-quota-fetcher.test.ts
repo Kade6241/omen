@@ -4,8 +4,8 @@ import assert from "node:assert/strict";
 const genericModule = await import("../../open-sse/services/genericQuotaFetcher.ts");
 const preflightModule = await import("../../open-sse/services/quotaPreflight.ts");
 
-const { convertUsageToQuotaInfo, registerGenericQuotaFetchers } = genericModule;
-const { getQuotaFetcher } = preflightModule;
+const { convertUsageToQuotaInfo, fetchGenericQuota, registerGenericQuotaFetchers } = genericModule;
+const { getQuotaFetcher, preflightQuota, resolveQuotaFetcher } = preflightModule;
 
 test("convertUsageToQuotaInfo returns null on null/undefined input", () => {
   assert.equal(convertUsageToQuotaInfo(null), null);
@@ -113,4 +113,78 @@ test("registerGenericQuotaFetchers registers Claude, GLM, and OpenCode Go via th
   // assert "codex" here without first calling registerCodexQuotaFetcher,
   // which would couple this test to chat.ts startup wiring. The skip list
   // semantics are exercised by the source code review.
+});
+
+test("Dario quota fetcher resolves from a compatible connection capability", () => {
+  registerGenericQuotaFetchers();
+  const connection = {
+    provider: "anthropic-compatible-12345678-abcd-4abc-8abc-123456789abc",
+    authType: "apikey",
+    providerSpecificData: { usageAdapter: "dario" },
+  };
+  assert.equal(resolveQuotaFetcher(connection.provider, connection), getQuotaFetcher("dario"));
+  assert.equal(
+    resolveQuotaFetcher("anthropic-compatible-12345678-abcd-4abc-8abc-123456789abc", {
+      provider: "anthropic-compatible-12345678-abcd-4abc-8abc-123456789abc",
+      providerSpecificData: {},
+    }),
+    undefined
+  );
+});
+
+test("Dario preflight blocks when either observed window reaches its cutoff", async () => {
+  registerGenericQuotaFetchers();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response(
+      JSON.stringify({ accounts: [{ id: "a", util5h: 0.5, util7d: 0.99, utilAgeMs: 1 }] }),
+      { status: 200, headers: { "content-type": "application/json" } }
+    );
+  try {
+    const connection = {
+      provider: "anthropic-compatible-12345678-abcd-4abc-8abc-123456789abc",
+      authType: "apikey",
+      apiKey: "test-key",
+      providerSpecificData: {
+        usageAdapter: "dario",
+        usageBaseUrl: "https://example.com/dario",
+      },
+    };
+    const result = await preflightQuota(connection.provider, "dario-cutoff-test", connection, {
+      resolveMinRemainingPercent: () => 2,
+    });
+    assert.equal(result.proceed, false);
+    assert.equal(result.reason, "quota_exhausted");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Dario generic quota cache stays isolated by connection id", async () => {
+  let calls = 0;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    calls++;
+    return new Response(
+      JSON.stringify({ accounts: [{ id: "a", util5h: 0.2, util7d: 0.3, utilAgeMs: 1 }] }),
+      { status: 200, headers: { "content-type": "application/json" } }
+    );
+  };
+  const connection = {
+    provider: "anthropic-compatible-12345678-abcd-4abc-8abc-123456789abc",
+    authType: "apikey",
+    apiKey: "test-key",
+    providerSpecificData: {
+      usageAdapter: "dario",
+      usageBaseUrl: "https://example.com/dario",
+    },
+  };
+  try {
+    await fetchGenericQuota("dario-cache-a", connection);
+    await fetchGenericQuota("dario-cache-a", connection);
+    await fetchGenericQuota("dario-cache-b", connection);
+    assert.equal(calls, 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

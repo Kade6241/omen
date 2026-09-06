@@ -16,7 +16,7 @@ import {
 } from "./utils";
 import Card from "@/shared/components/Card";
 import { CardSkeleton } from "@/shared/components/Loading";
-import { USAGE_SUPPORTED_PROVIDERS } from "@/shared/constants/providers";
+import { supportsProviderQuota } from "@/shared/utils/providerQuotaVisibility";
 import { pickDisplayValue } from "@/shared/utils/maskEmail";
 import useEmailPrivacyStore from "@/store/emailPrivacyStore";
 import { useNotificationStore } from "@/store/notificationStore";
@@ -529,7 +529,7 @@ export default function ProviderLimits({
       connections.filter(
         (conn) =>
           isProviderQuotaVisible(conn) &&
-          USAGE_SUPPORTED_PROVIDERS.includes(conn.provider) &&
+          supportsProviderQuota(conn.provider, conn) &&
           (conn.authType === "oauth" || conn.authType === "apikey")
       ),
     [connections]

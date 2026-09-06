@@ -112,6 +112,40 @@ export function validateProviderSpecificData(
     });
   }
 
+  const usageAdapter = data.usageAdapter;
+  if (usageAdapter !== undefined && usageAdapter !== "dario") {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'providerSpecificData.usageAdapter must be "dario" when provided',
+      path: ["usageAdapter"],
+    });
+  }
+
+  const usageBaseUrl = data.usageBaseUrl;
+  if (usageBaseUrl !== undefined) {
+    let valid = typeof usageBaseUrl === "string";
+    if (valid) {
+      try {
+        const parsed = new URL(usageBaseUrl as string);
+        valid =
+          (parsed.protocol === "http:" || parsed.protocol === "https:") &&
+          !parsed.username &&
+          !parsed.password &&
+          !parsed.search &&
+          !parsed.hash;
+      } catch {
+        valid = false;
+      }
+    }
+    if (!valid) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "providerSpecificData.usageBaseUrl must be an unambiguous http(s) URL",
+        path: ["usageBaseUrl"],
+      });
+    }
+  }
+
   const customUserAgent = data.customUserAgent;
   if (
     customUserAgent !== undefined &&

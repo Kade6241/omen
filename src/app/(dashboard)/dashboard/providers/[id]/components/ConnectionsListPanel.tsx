@@ -166,7 +166,6 @@ export default function ConnectionsListPanel({
   t,
 }: ConnectionsListPanelProps) {
   const sorted = [...connections].sort((a, b) => (a.priority || 0) - (b.priority || 0));
-  const quotaSupported = supportsProviderQuota(providerId);
   const hasAnyTag = sorted.some((c) => c.providerSpecificData?.tag as string | undefined);
   const allSelected = selectedIds.size === connections.length && connections.length > 0;
   const someSelected = selectedIds.size > 0 && selectedIds.size < connections.length;
@@ -397,7 +396,7 @@ export default function ConnectionsListPanel({
                 onToggleActive={(isActive) => handleUpdateConnectionStatus(conn.id, isActive)}
                 onToggleRateLimit={(enabled) => handleToggleRateLimit(conn.id, enabled)}
                 onToggleQuotaVisibility={quotaVisibilityHandler(
-                  quotaSupported,
+                  supportsProviderQuota(providerId, conn),
                   conn.id,
                   handleToggleQuotaVisibility
                 )}
@@ -598,7 +597,7 @@ export default function ConnectionsListPanel({
                     onToggleActive={(isActive) => handleUpdateConnectionStatus(conn.id, isActive)}
                     onToggleRateLimit={(enabled) => handleToggleRateLimit(conn.id, enabled)}
                     onToggleQuotaVisibility={quotaVisibilityHandler(
-                      quotaSupported,
+                      supportsProviderQuota(providerId, conn),
                       conn.id,
                       handleToggleQuotaVisibility
                     )}

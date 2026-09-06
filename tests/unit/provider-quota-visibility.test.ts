@@ -16,3 +16,24 @@ test("quota visibility controls are limited to providers with quota support", ()
   assert.equal(supportsProviderQuota("codex"), true);
   assert.equal(supportsProviderQuota("openai"), false);
 });
+
+test("Dario quota support follows the compatible connection capability", () => {
+  const provider = "anthropic-compatible-12345678-abcd-4abc-8abc-123456789abc";
+  assert.equal(
+    supportsProviderQuota(provider, {
+      provider,
+      authType: "apikey",
+      providerSpecificData: { usageAdapter: "dario" },
+    }),
+    true
+  );
+  assert.equal(supportsProviderQuota(provider, { provider, providerSpecificData: {} }), false);
+  assert.equal(
+    supportsProviderQuota(provider, {
+      provider,
+      authType: "apikey",
+      providerSpecificData: { usageAdapter: "../../module" },
+    }),
+    false
+  );
+});

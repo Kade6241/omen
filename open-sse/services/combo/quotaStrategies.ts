@@ -31,8 +31,9 @@ import {
   type ProviderProfile,
 } from "../accountFallback.ts";
 import { PRE_SCREEN_CONCURRENCY } from "../comboConfig.ts";
-import { getQuotaFetcher } from "../quotaPreflight.ts";
+import { getQuotaFetcher, resolveQuotaFetcher } from "../quotaPreflight.ts";
 import { getCircuitBreaker } from "../../../src/shared/utils/circuitBreaker";
+import { isCompatibleProviderConnectionId } from "../../../src/shared/utils/compatibleProviderId";
 import { getCachedProviderConnections } from "../../../src/lib/db/readCache";
 import { MAX_RR_COUNTERS, rrCounters } from "./rrState.ts";
 import type { ResolvedComboTarget, IsModelAvailable } from "./types.ts";
@@ -71,7 +72,9 @@ async function getQuotaAwareConnectionsForTarget(
   log: { warn?: (...args: unknown[]) => void }
 ) {
   const provider = getResetAwareProvider(target);
-  if (!provider || !getQuotaFetcher(provider)) return [];
+  if (!provider) return [];
+  const hasStaticFetcher = Boolean(getQuotaFetcher(provider));
+  if (!hasStaticFetcher && !isCompatibleProviderConnectionId(provider)) return [];
   if (!connectionCache.has(provider)) {
     const cached = resetAwareConnectionCache.get(provider);
     if (cached && Date.now() - cached.fetchedAt < RESET_AWARE_CONNECTION_CACHE_TTL_MS) {
@@ -90,6 +93,11 @@ async function getQuotaAwareConnectionsForTarget(
               : [];
             if (provider === "antigravity" || provider === "agy") {
               activeConnections = preferAntigravityConnectionsWithStoredProject(activeConnections);
+            }
+            if (!hasStaticFetcher) {
+              activeConnections = activeConnections.filter((connection) =>
+                resolveQuotaFetcher(provider, connection)
+              );
             }
             if (
               !resetAwareConnectionCache.has(provider) &&
@@ -261,7 +269,8 @@ async function scoreQuotaAwareTargets<TScore extends object>({
     async (target, index) => {
       let quota: unknown = null;
       const provider = getResetAwareProvider(target);
-      const fetcher = provider ? getQuotaFetcher(provider) : null;
+      const connection = target.connectionId ? connectionById.get(target.connectionId) : undefined;
+      const fetcher = provider ? resolveQuotaFetcher(provider, connection) : null;
       if (fetcher && provider && target.connectionId) {
         const quotaKey = `${provider}:${target.connectionId}`;
         if (!quotaPromises.has(quotaKey)) {
@@ -270,7 +279,7 @@ async function scoreQuotaAwareTargets<TScore extends object>({
             fetchResetAwareQuotaWithCache({
               provider,
               connectionId: target.connectionId,
-              connection: connectionById.get(target.connectionId),
+              connection,
               fetcher,
               config,
               log,
@@ -388,8 +397,10 @@ export async function fetchResetAwareQuotaWithCache({
             fetchedAt: Date.now(),
             refreshPromise: null,
           });
-        } else {
+        } else if (!existing?.quota) {
           resetAwareQuotaCache.delete(cacheKey);
+        } else {
+          resetAwareQuotaCache.set(cacheKey, { ...existing, refreshPromise: null });
         }
         return quota;
       })

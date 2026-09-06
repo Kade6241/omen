@@ -15,7 +15,7 @@
 
 import {
   evaluateQuotaCutoff,
-  getQuotaFetcher,
+  resolveQuotaFetcher,
   type PreflightQuotaThresholds,
   type QuotaInfo,
 } from "../quotaPreflight.ts";
@@ -103,17 +103,15 @@ export async function resolveQuotaExhaustionCutoffForTarget(
     (resilienceSettings ?? resolveResilienceSettings(null))?.quotaPreflight?.enabled === true;
   if (!quotaCutoffEnabled || !provider || !connectionId) return { blocked: false };
 
-  const fetcher = getQuotaFetcher(provider);
-  if (!fetcher) return { blocked: false };
-
   let connection: Record<string, unknown> | undefined;
   try {
     connection = (await getCachedProviderConnectionById(connectionId)) as
-      | Record<string, unknown>
-      | undefined;
+      Record<string, unknown> | undefined;
   } catch {
     connection = undefined;
   }
+  const fetcher = resolveQuotaFetcher(provider, connection);
+  if (!fetcher) return { blocked: false };
 
   try {
     const quota = await fetchResetAwareQuotaWithCache({

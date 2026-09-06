@@ -15,6 +15,8 @@ import {
   extractCodeAssistSubscriptionTier,
 } from "./codeAssistSubscription.ts";
 import { toDisplayLabel } from "./usage/scalars.ts";
+import { resolveUsageAdapter } from "./usage/adapter.ts";
+import { getDarioUsage } from "./usage/dario.ts";
 import { parseResetTime, createQuotaFromUsage } from "./usage/quota.ts";
 import {
   getMiniMaxUsage,
@@ -145,6 +147,8 @@ export const USAGE_FETCHER_PROVIDERS = [
   "cnl",
   // AgentRouter (New-API) console balance (GET /api/user/self)
   "agentrouter",
+  // Internal connection capability for Anthropic-compatible Dario endpoints.
+  "dario",
 ] as const;
 
 export type UsageFetcherProvider = (typeof USAGE_FETCHER_PROVIDERS)[number];
@@ -159,6 +163,10 @@ export async function getUsageForProvider(
   options: { forceRefresh?: boolean } = {}
 ) {
   const { id, provider, accessToken, apiKey, providerSpecificData, projectId, email } = connection;
+
+  if (resolveUsageAdapter(connection) === "dario") {
+    return await getDarioUsage(connection);
+  }
 
   switch (provider) {
     case "github":
