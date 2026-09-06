@@ -1,1 +1,0 @@
-- **fix(dashboard):** Organize sidebar navigation with compact links, collapsible subgroups, clearer active-page styling, accessible keyboard controls, and a mobile close button — thanks @yugui923.
