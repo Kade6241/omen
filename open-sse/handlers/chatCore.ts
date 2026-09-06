@@ -3268,13 +3268,13 @@ export async function handleChatCore({
 
               // For streaming: release the semaphore when the client drains or cancels the stream.
               // Non-2xx streams must drop the slot before returning so the pipeline can rotate
-              // accounts without holding the failed connection's concurrency gate.
+              // accounts without holding the failed connection's concurrency gate. Do NOT
+              // cancel() the body here — the pipeline clones it (BYOP 422 / toOutcome).
               if (stream) {
                 const originalBody = res.response.body;
                 const okStatus = res.response.status >= 200 && res.response.status < 300;
                 if (!originalBody || !okStatus) {
                   releaseAccountSemaphore();
-                  originalBody?.cancel().catch(() => {});
                   return {
                     ...res,
                     _executionCredentials: execCreds,

@@ -9,6 +9,7 @@ import { applyStatusRestatement } from "../../config/upstreamStatusRestatement.t
 import { recoverAnthropicThinkingSignature } from "./thinkingSignatureRecovery.ts";
 import { isModelUnavailableError, getNextFamilyFallback as defaultGetNextFamilyFallback } from "../../services/modelFamilyFallback.ts";
 import { COOLDOWN_MS } from "../../config/errorConfig.ts";
+import { normalizeHeaders } from "../../utils/headers.ts";
 
 export interface ChatCoreExecutorResult {
   response: Response;
@@ -124,7 +125,11 @@ function currentConnectionId(connection: PipelineConnectionContext): string {
 }
 
 function retryAfterMsFrom(attempt: ChatCoreExecutorResult): number | null {
-  const raw = attempt.headers?.["retry-after"] ?? attempt.headers?.["Retry-After"];
+  // attempt.headers is the outbound request bag (BaseExecutor finalHeaders).
+  // Retry-After lives on the upstream Response — same source as the parent
+  // chatCore rotate path. normalizeHeaders lower-cases keys, so "Retry-After"
+  // is looked up as "retry-after"; it does not drop the field.
+  const raw = normalizeHeaders(attempt.response?.headers)["retry-after"];
   if (raw == null || raw === "") return null;
   const parsed = Number.parseFloat(String(raw));
   if (!Number.isFinite(parsed) || parsed < 0) return null;
@@ -176,6 +181,8 @@ async function toOutcome(
   let message = attempt.response.statusText || "upstream error";
   let body: unknown = attempt.transformedBody;
   try {
+    // clone() is the drain. sendProviderAttempt must not cancel() a streaming
+    // non-2xx body before we get here (BYOP 422 / Codex 429 Retry-After).
     body = JSON.parse(await attempt.response.clone().text());
     const err = (body as { error?: { message?: unknown } } | null)?.error;
     if (err && typeof err.message === "string" && err.message) message = err.message;
@@ -310,6 +317,8 @@ export async function runProviderExecutionPipeline(
     }
 
     if (canRotateAccount && target.provider === "antigravity" && status === 422) {
+      // Same drain as toOutcome: clone the Response. A prior body.cancel()
+      // makes this throw "Body has already been consumed" and skips rotate.
       const byopBody = await attempt.response
         .clone()
         .text()

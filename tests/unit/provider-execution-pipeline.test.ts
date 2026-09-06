@@ -528,6 +528,63 @@ test("Codex 429 rotation calls scope-rate-limit, affinity-clear, and audit hooks
   assert.equal(audits[0]?.newConnectionId, "conn-b");
 });
 
+test("Codex 429 cooldown reads Retry-After from the response, not request headers", async () => {
+  const { runProviderExecutionPipeline } = await import(
+    "../../open-sse/handlers/chatCore/providerExecutionPipeline.ts"
+  );
+  const rateLimited: Array<Record<string, unknown>> = [];
+  let sendCount = 0;
+  const input = makeInput({
+    policy: { allowAccountRotation: true, allowModelFallback: true },
+    provider: "codex",
+    connectionId: "conn-a",
+    send: async () => {
+      sendCount += 1;
+      if (sendCount === 1) {
+        // BaseExecutor puts REQUEST headers on attempt.headers (Authorization).
+        // Upstream Retry-After lives on the Response. Mixing the two bags is the
+        // extract regression: cooldown silently falls back to 60s.
+        return {
+          response: jsonResponse(
+            { error: { message: "rate limited", type: "rate_limit_error" } },
+            429,
+            { "Retry-After": "5" }
+          ),
+          url: "https://upstream.test/v1/chat/completions",
+          headers: { Authorization: "Bearer request-token", "content-type": "application/json" },
+          transformedBody: { model: "gpt-5" },
+        };
+      }
+      return makeAttempt(
+        {
+          id: "chatcmpl-ok",
+          choices: [{ message: { role: "assistant", content: "rotated" }, finish_reason: "stop" }],
+        },
+        200
+      );
+    },
+    getProviderCredentials: (async () => ({
+      connectionId: "conn-b",
+      allRateLimited: false,
+    })) as PipelineConnectionContext["getProviderCredentials"],
+    state: {
+      onCodexScopeRateLimited: (params) => {
+        rateLimited.push(params as unknown as Record<string, unknown>);
+      },
+    },
+  });
+
+  const outcome = await runProviderExecutionPipeline(input);
+  assert.equal(outcome.kind, "response");
+  assert.equal(rateLimited.length, 1, "must persist Codex model-scope cooldown");
+  const until = new Date(String(rateLimited[0]?.rateLimitedUntil)).getTime();
+  const delta = until - Date.now();
+  assert.ok(
+    delta > 4_000 && delta < 8_000,
+    `Retry-After: 5 must yield ~5s cooldown, got ${delta}ms (60s = still reading request headers)`
+  );
+});
+
 test("Antigravity BYOP 422 rotation persists cooldown via setConnectionRateLimitedUntil", async () => {
   const { runProviderExecutionPipeline } = await import(
     "../../open-sse/handlers/chatCore/providerExecutionPipeline.ts"
