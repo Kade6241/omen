@@ -18,6 +18,7 @@ const quotaCache = await import("../../../src/domain/quotaCache.ts");
 const { getResetAwareRemainingPercent, resolveResetAwareConfig, scoreResetAwareQuota } =
   await import("../../../open-sse/services/combo/quotaScoring.ts");
 const { registerQuotaFetcher } = await import("../../../open-sse/services/quotaPreflight.ts");
+const { convertUsageToQuotaInfo } = await import("../../../open-sse/services/genericQuotaFetcher.ts");
 const {
   expandTargetsByQuotaAwareConnections,
   orderTargetsByQuotaWeighted,
@@ -733,4 +734,139 @@ test("hard-empty sticky account is dropped; pipeline reserves the live draw", as
   assert.equal(getInflight(dead), 0);
   assert.equal(getInflight(ok), 1);
   result.quotaShareRelease?.();
+});
+
+test("disableSessionStickiness on the live pipeline re-draws past a leftover sticky pin", async () => {
+  const provider = "agy";
+  const model = "gemini-3.8-flash-high";
+  const busy = `busy-${randomUUID()}`;
+  const idle = `idle-${randomUUID()}`;
+  registerQuotaFetcher(provider, async () => quotaAt(0.2));
+  incrementInflight(busy);
+  _setSecureRandomFloatSource(() => 0.4);
+  healthyStickiness();
+  const messages = [{ role: "user", content: `live-sticky-${randomUUID()}` }];
+  const comboName = `qw-live-${randomUUID()}`;
+  const probe = await applySessionStickiness(
+    [makeTarget(provider, busy), makeTarget(provider, idle)],
+    messages,
+    comboName
+  );
+  assert.ok(probe.messageHash);
+  recordStickyBinding(probe.messageHash, busy, comboName);
+  const result = await resolveComboTargetPipeline({
+    body: { messages },
+    combo: {
+      id: comboName,
+      name: comboName,
+      models: pinComboModels(provider, model, [busy, idle]),
+      config: { disableSessionStickiness: true },
+    },
+    strategy: "quota-weighted",
+    config: { disableSessionStickiness: true },
+    settings: null,
+    allCombos: null,
+    relayOptions: null,
+    signal: null,
+    apiKeyAllowedConnections: null,
+    log: pipelineLog,
+    resilienceSettings: { providerCooldown: { enabled: false } },
+    isModelAvailable: undefined,
+    handleSingleModelWithTimeout: async () => new Response("{}"),
+    buildAutoCandidates: async () => [],
+  });
+  assert.equal("earlyResponse" in result, false);
+  if ("earlyResponse" in result) return;
+  assert.equal(result.sticky.stuck, false);
+  assert.equal(result.orderedTargets[0]?.connectionId, idle);
+  assert.equal(getInflight(idle), 1);
+  assert.equal(getInflight(busy), 1);
+  result.quotaShareRelease?.();
+});
+
+test("ten equal-score pinned Gemini accounts: in-flight on the first flips a mid-band draw", async () => {
+  const provider = "agy";
+  const ids = Array.from({ length: 10 }, () => `g-${randomUUID()}`);
+  const targets = ids.map((id) => makeTarget(provider, id));
+  registerQuotaFetcher(provider, async () => quotaAt(0.25));
+  // 10 equal weights → slot 0 is [0, 0.10). 1 inflight on [0] shrinks it to
+  // [0, 0.5/9.5) ≈ [0, 0.0526). 0.07 sits in that gap: hits [0] idle, misses [0] busy.
+  _setSecureRandomFloatSource(() => 0.07);
+  const idle = await orderTargetsByQuotaWeighted(targets, "ten-agy-idle", {}, { warn() {} }, null);
+  assert.equal(idle[0]?.connectionId, ids[0]);
+
+  incrementInflight(ids[0]);
+  const busy = await orderTargetsByQuotaWeighted(targets, "ten-agy-busy", {}, { warn() {} }, null);
+  assert.equal(busy.length, 10);
+  assert.notEqual(busy[0]?.connectionId, ids[0]);
+  assert.equal(ids.includes(busy[0]?.connectionId ?? ""), true);
+});
+
+test("three hard-empty of ten never win the first draw", async () => {
+  const provider = "agy";
+  const dead = Array.from({ length: 3 }, () => `dead-${randomUUID()}`);
+  const ok = Array.from({ length: 7 }, () => `ok-${randomUUID()}`);
+  registerQuotaFetcher(provider, async (id) =>
+    dead.includes(id) ? quotaAt(1, { limitReached: true }) : quotaAt(0.25)
+  );
+  _setSecureRandomFloatSource(() => 0);
+  const ordered = await orderTargetsByQuotaWeighted(
+    [...dead, ...ok].map((id) => makeTarget(provider, id)),
+    "three-of-ten-empty",
+    {},
+    { warn() {} },
+    null
+  );
+  assert.equal(ordered.length, 7);
+  assert.equal(dead.includes(ordered[0]?.connectionId ?? ""), false);
+  for (const id of dead) assert.equal(ordered.some((t) => t.connectionId === id), false);
+  for (const id of ok) assert.equal(ordered.some((t) => t.connectionId === id), true);
+});
+
+test("quota-weighted Gemini keeps the account when only Claude weekly is empty", async () => {
+  const provider = "agy";
+  const conn = `mix-${randomUUID()}`;
+  const resetAt5h = iso(5 * 3600_000);
+  const resetAt7d = iso(7 * 86_400_000);
+  const usage = {
+    quotas: {
+      "gemini-3.8-flash-high": {
+        remainingPercentage: 80,
+        resetAt: resetAt5h,
+      },
+      "claude-sonnet-4-5": {
+        remainingPercentage: 0,
+        resetAt: resetAt7d,
+      },
+      gemini_weekly: {
+        remainingPercentage: 70,
+        resetAt: resetAt7d,
+      },
+      claude_gpt_weekly: {
+        remainingPercentage: 0,
+        resetAt: resetAt7d,
+      },
+    },
+  };
+  const scoped = convertUsageToQuotaInfo(usage, {
+    provider,
+    requestedModel: "agy/gemini-3.8-flash-high",
+  });
+  assert.ok(scoped);
+  assert.equal(scoped.limitReached, false);
+  assert.ok(getResetAwareRemainingPercent(scoped) > 1);
+  registerQuotaFetcher(provider, async () => scoped);
+  _setSecureRandomFloatSource(() => 0);
+  const ordered = await orderTargetsByQuotaWeighted(
+    [makeTarget(provider, conn, "gemini-3.8-flash-high")],
+    "claude-empty-gemini-live",
+    {},
+    { warn() {} },
+    null
+  );
+  assert.equal(ordered.length, 1);
+  assert.equal(ordered[0]?.connectionId, conn);
+
+  const unscoped = convertUsageToQuotaInfo(usage);
+  assert.equal(unscoped?.limitReached, true);
 });
