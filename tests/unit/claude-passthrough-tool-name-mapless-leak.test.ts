@@ -68,6 +68,29 @@ describe("restoreClaudePassthroughToolUseName — declared-casing normalization 
     assert.equal(parsed.content_block.name, "bash");
   });
 
+  it("proxy_ ledger (claude passthrough) must not trigger the canonical upgrade — the #12721 live leak", () => {
+    // buildClaudePassthroughToolNameMap always emits proxy_<name> -> <name>
+    // for claude passthrough; a non-empty ledger used to route through
+    // restoreClaudeToolName whose canonical fallback upgraded bash -> Bash.
+    const parsed = toolUseBlock("bash");
+    const map = new Map([
+      ["proxy_bash", "bash"],
+      ["proxy_read", "read"],
+    ]);
+    assert.equal(
+      restoreClaudePassthroughToolUseName(parsed, map, anthropicTools(["bash", "read"])),
+      false
+    );
+    assert.equal(parsed.content_block.name, "bash");
+  });
+
+  it("proxy_ ledger still restores prefixed echoes", () => {
+    const parsed = toolUseBlock("proxy_bash");
+    const map = new Map([["proxy_bash", "bash"]]);
+    assert.equal(restoreClaudePassthroughToolUseName(parsed, map, anthropicTools(["bash"])), true);
+    assert.equal(parsed.content_block.name, "bash");
+  });
+
   it("leaves undeclared names verbatim instead of canonicalizing them (no map)", () => {
     const parsed = toolUseBlock("memory_store");
     assert.equal(

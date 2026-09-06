@@ -603,27 +603,40 @@ export function restoreClaudePassthroughToolUseName(
       : null;
   if (!block || block.type !== "tool_use" || typeof block.name !== "string") return false;
 
-  // Alias map first: when the request path renamed tools, its entries map the
-  // upstream (renamed) spelling back to the CLIENT's original spelling — the
-  // only source that knows it.
   const map = toolNameMap instanceof Map ? toolNameMap : null;
+
+  // 1) Alias ledger, direct lookups only. restoreClaudeToolName() is NOT used
+  //    here on purpose: its canonical-upgrade fallback (bash -> Bash) fires
+  //    even when an alias ledger exists (canonical beats the identity match),
+  //    which poisoned claude->claude passthrough: the proxy_ ledger
+  //    (buildClaudePassthroughToolNameMap) is always non-empty for claude
+  //    passthrough, so every lowercase-declaring client (pi/OpenCode on
+  //    claude-format executors like devin-cli-agentic) received "Bash" on the
+  //    SSE path while the JSON path (direct map.get) stayed correct (#12721).
   if (map && map.size > 0) {
-    const restoredName = restoreClaudeToolName(block.name, map);
-    if (restoredName !== block.name) {
-      block.name = restoredName;
+    const exact = map.get(block.name);
+    if (typeof exact === "string" && exact !== block.name) {
+      block.name = exact;
       return true;
+    }
+    const lower = block.name.toLowerCase();
+    for (const [sanitized, original] of map.entries()) {
+      if (sanitized.toLowerCase() !== lower && original.toLowerCase() !== lower) {
+        continue;
+      }
+      if (original !== block.name) {
+        block.name = original;
+        return true;
+      }
+      break; // identity echo in the ledger — nothing to restore
     }
   }
 
-  // No aliases (or the map matched verbatim): normalize upstream case drift
-  // to the request's DECLARED casing so a passthrough can never hand the
-  // client a name it did not declare. A mapless restore used to "upgrade"
-  // known Claude Code names (bash -> Bash) for clients that declared
-  // lowercase "bash" (pi/OpenCode on claude-format executors like
-  // devin-cli-agentic), breaking tool dispatch and the echoed history
-  // (#12721). Conversely a genuine Claude Code client (declared "Bash")
-  // still gets "Bash" back when an OpenAI-style upstream downcased it
-  // (#7926).
+  // 2) Normalize upstream case drift to the request's DECLARED casing so a
+  //    passthrough can never hand the client a name it did not declare
+  //    (#12721). Conversely a genuine Claude Code client (declared "Bash")
+  //    still gets "Bash" back when an OpenAI-style upstream downcased it
+  //    (#7926).
   const declaredName = findDeclaredToolName(requestTools, block.name);
   if (declaredName !== null) {
     if (declaredName === block.name) return false;
@@ -631,9 +644,14 @@ export function restoreClaudePassthroughToolUseName(
     return true;
   }
 
-  // No declared match and no alias: leave the upstream name verbatim instead
-  // of canonicalizing it (server tools, tool_choice-free probes, ...).
-  return false;
+  // 3) Undeclared name with no alias: legacy canonicalization (canonical
+  //    Claude Code spelling) as a last resort for CC-shaped traffic whose
+  //    request body carries no tools[] (server tools, bare probes).
+  if (map && map.size > 0) return false;
+  const restoredName = restoreClaudeToolName(block.name, null);
+  if (restoredName === block.name) return false;
+  block.name = restoredName;
+  return true;
 }
 
 /**
