@@ -1,4 +1,7 @@
 {
+  "open-sse/executors/glm.ts": {
+    "TS2554": 1
+  },
   "open-sse/transformer/responsesTransformer.ts": {
     "TS2353": 1
   },
