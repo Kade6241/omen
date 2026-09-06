@@ -44,6 +44,9 @@ const { HANDLED_COMBO_STRATEGIES } =
   await import("../../../open-sse/services/combo/strategyDispatch.ts");
 const { comboStrategySchema } = await import("../../../src/shared/validation/schemas.ts");
 const { _setSecureRandomFloatSource } = await import("../../../src/shared/utils/secureRandom.ts");
+const { getQuotaFetchScope } = await import(
+  "../../../open-sse/services/antigravityQuotaFamily.ts"
+);
 
 after(() => {
   dbCore.resetDbInstance();
@@ -253,6 +256,7 @@ test("weighted draw float 0 hits first pool member, ~1 hits last", async () => {
   const first = await orderTargetsByQuotaWeighted(targets, "bound0", {}, { warn() {} }, null);
   assert.equal(first[0]?.connectionId, a1);
 
+  _clearInflightForTest();
   _setSecureRandomFloatSource(() => 0.999);
   const last = await orderTargetsByQuotaWeighted(targets, "bound1", {}, { warn() {} }, null);
   assert.equal(last[0]?.connectionId, a2);
@@ -313,6 +317,21 @@ test("floor=0 puts 0.5% in the main pool", async () => {
     ordered.some((t) => t.connectionId === low),
     true
   );
+  _clearInflightForTest();
+  const cfg = resolveResetAwareConfig({});
+  const sOk = scoreResetAwareQuota(quotaAt(0.6), cfg).score;
+  const sLow = scoreResetAwareQuota(quotaAt(0.995), cfg).score;
+  // Pool keeps expand order, not score order. r = sOk is the half-open
+  // boundary after the healthy slot, so the leftover 0.5% account leads.
+  _setSecureRandomFloatSource(() => sOk / (sOk + sLow));
+  const lowFirst = await orderTargetsByQuotaWeighted(
+    [makeTarget(provider, ok), makeTarget(provider, low)],
+    "f0-first",
+    { quotaWeightedFloorPercent: 0 },
+    { warn() {} },
+    null
+  );
+  assert.equal(lowFirst[0]?.connectionId, low);
 });
 
 test("only two 0.5% accounts still serve, never 404", async () => {
@@ -347,6 +366,7 @@ test("pinned hard-empty connection stays dropped", async () => {
 test("family filter: gemini request ignores Claude-empty windows", async () => {
   const provider = "agy";
   const conn = `fam-${randomUUID()}`;
+  assert.equal(getQuotaFetchScope(provider, "agy/gemini-3.8-flash-high"), "family:gemini");
   registerQuotaFetcher(provider, async (_id, connection) => {
     const model = String(connection?.requestedModel || "");
     assert.equal(model.includes("claude"), false, "gemini request must not fetch Claude snapshot");
@@ -513,6 +533,14 @@ test("floor=100 puts remaining in (0,100] into B", async () => {
     null
   );
   assert.equal(ordered.length, 2);
+  assert.equal(
+    ordered.some((t) => t.connectionId === low),
+    true
+  );
+  assert.equal(
+    ordered.some((t) => t.connectionId === ok),
+    true
+  );
 });
 
 test("comboStrategySchema and HANDLED accept quota-weighted", () => {
@@ -540,7 +568,8 @@ test("applyStrategyOrdering(quota-weighted) uses the orderer", async () => {
     }
   );
   assert.equal(out.orderedTargets[0]?.connectionId, ok);
-  assert.equal(out.quotaShareRelease, null);
+  assert.ok(out.quotaShareRelease);
+  out.quotaShareRelease?.();
 });
 
 const pipelineLog = { info() {}, warn() {}, error() {}, debug() {} };
@@ -579,7 +608,7 @@ test("in-flight load on the higher-score account flips the 0.4 draw to the idle 
   assert.equal(ordered[0]?.connectionId, idle);
 });
 
-test("applyStrategyOrdering(quota-weighted) does not reserve; pipeline reserves the final [0]", async () => {
+test("applyStrategyOrdering(quota-weighted) reserves the draw; pipeline keeps it when stickiness does not move", async () => {
   const provider = "agy";
   const model = "gemini-3.8-flash-high";
   const busy = `busy-${randomUUID()}`;
@@ -598,7 +627,11 @@ test("applyStrategyOrdering(quota-weighted) does not reserve; pipeline reserves 
       apiKeyAllowedConnections: null,
     }
   );
-  assert.equal(ordered.quotaShareRelease, null);
+  assert.ok(ordered.quotaShareRelease);
+  assert.equal(ordered.orderedTargets[0]?.connectionId, idle);
+  assert.equal(getInflight(idle), 1);
+  assert.equal(getInflight(busy), 1);
+  ordered.quotaShareRelease?.();
   assert.equal(getInflight(idle), 0);
   assert.equal(getInflight(busy), 1);
 
@@ -869,4 +902,114 @@ test("quota-weighted Gemini keeps the account when only Claude weekly is empty",
 
   const unscoped = convertUsageToQuotaInfo(usage);
   assert.equal(unscoped?.limitReached, true);
+});
+
+test("orderer half-open boundary: 0.66 stays on A1, 0.67 flips to A2", async () => {
+  const provider = "agy";
+  const a1 = `a1-${randomUUID()}`;
+  const a2 = `a2-${randomUUID()}`;
+  registerQuotaFetcher(provider, async (id) => (id === a1 ? quotaAt(0.2) : quotaAt(0.6)));
+  const cfg = resolveResetAwareConfig({});
+  const s1 = scoreResetAwareQuota(quotaAt(0.2), cfg).score;
+  const s2 = scoreResetAwareQuota(quotaAt(0.6), cfg).score;
+  assert.ok(s1 > s2);
+  const sum = s1 + s2;
+  const targets = [makeTarget(provider, a1), makeTarget(provider, a2)];
+
+  _setSecureRandomFloatSource(() => (s1 - 0.01) / sum);
+  const stay = await orderTargetsByQuotaWeighted(targets, "bound-stay", {}, { warn() {} }, null);
+  assert.equal(stay[0]?.connectionId, a1);
+
+  _clearInflightForTest();
+  _setSecureRandomFloatSource(() => s1 / sum);
+  const flip = await orderTargetsByQuotaWeighted(targets, "bound-flip", {}, { warn() {} }, null);
+  assert.equal(flip[0]?.connectionId, a2);
+});
+
+test("p2c ordering does not drop hard-empty the way quota-weighted does", async () => {
+  const provider = "agy";
+  const dead = `dead-${randomUUID()}`;
+  const ok = `ok-${randomUUID()}`;
+  registerQuotaFetcher(provider, async (id) =>
+    id === dead ? quotaAt(1, { limitReached: true }) : quotaAt(0.2)
+  );
+  _setSecureRandomFloatSource(() => 0);
+  const weighted = await applyStrategyOrdering(
+    "quota-weighted",
+    [makeTarget(provider, dead), makeTarget(provider, ok)],
+    {
+      combo: { id: "c-qw", name: "c-qw", models: [], config: {} },
+      config: {},
+      body: { messages: [] },
+      log: pipelineLog,
+      apiKeyAllowedConnections: null,
+    }
+  );
+  assert.equal(weighted.orderedTargets.length, 1);
+  assert.equal(weighted.orderedTargets[0]?.connectionId, ok);
+
+  const p2c = await applyStrategyOrdering(
+    "p2c",
+    [makeTarget(provider, dead), makeTarget(provider, ok)],
+    {
+      combo: { id: "c-p2c", name: "c-p2c", models: [], config: {} },
+      config: {},
+      body: { messages: [] },
+      log: pipelineLog,
+      apiKeyAllowedConnections: null,
+    }
+  );
+  assert.equal(p2c.orderedTargets.length, 2);
+  assert.equal(
+    p2c.orderedTargets.some((t) => t.connectionId === dead),
+    true
+  );
+});
+
+test("two pipelines starting together do not both land on the same idle account", async () => {
+  const provider = "agy";
+  const model = "gemini-3.8-flash-high";
+  const first = `first-${randomUUID()}`;
+  const second = `second-${randomUUID()}`;
+  registerQuotaFetcher(provider, async () => {
+    await Promise.resolve();
+    return quotaAt(0.2);
+  });
+  // 0.4 sits past the diluted first slot once the first pipeline has reserved.
+  _setSecureRandomFloatSource(() => 0.4);
+  healthyStickiness();
+  const comboName = `qw-race-${randomUUID()}`;
+  const run = (content: string) =>
+    resolveComboTargetPipeline({
+      body: { messages: [{ role: "user", content }] },
+      combo: {
+        id: comboName,
+        name: comboName,
+        models: pinComboModels(provider, model, [first, second]),
+        config: { disableSessionStickiness: true },
+      },
+      strategy: "quota-weighted",
+      config: { disableSessionStickiness: true },
+      settings: null,
+      allCombos: null,
+      relayOptions: null,
+      signal: null,
+      apiKeyAllowedConnections: null,
+      log: pipelineLog,
+      resilienceSettings: { providerCooldown: { enabled: false } },
+      isModelAvailable: undefined,
+      handleSingleModelWithTimeout: async () => new Response("{}"),
+      buildAutoCandidates: async () => [],
+    });
+
+  const [left, right] = await Promise.all([run(`a-${randomUUID()}`), run(`b-${randomUUID()}`)]);
+  assert.equal("earlyResponse" in left, false);
+  assert.equal("earlyResponse" in right, false);
+  if ("earlyResponse" in left || "earlyResponse" in right) return;
+  const winners = [left.orderedTargets[0]?.connectionId, right.orderedTargets[0]?.connectionId];
+  assert.notEqual(winners[0], winners[1]);
+  assert.equal(new Set(winners).size, 2);
+  assert.equal(getInflight(first) + getInflight(second), 2);
+  left.quotaShareRelease?.();
+  right.quotaShareRelease?.();
 });

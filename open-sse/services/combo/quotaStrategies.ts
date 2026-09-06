@@ -47,7 +47,7 @@ import {
 } from "./quotaScoring.ts";
 import { secureRandomFloat, secureRandomInt } from "../../../src/shared/utils/secureRandom.ts";
 import { rankByHeadroom, type HeadroomSaturation } from "./headroomRanking.ts";
-import { getInflight } from "./quotaShareInflight.ts";
+import { getInflight, incrementInflight } from "./quotaShareInflight.ts";
 import { preferAntigravityConnectionsWithStoredProject } from "../antigravityProjectPersist.ts";
 import { getQuotaFetchScope } from "../antigravityQuotaFamily.ts";
 import { isQuotaExhaustedForRequest } from "../../../src/domain/quotaCache.ts";
@@ -821,6 +821,11 @@ export async function orderTargetsByQuotaWeighted(
   }
 
   const winner = selected[pickIndex];
+  // Reserve in this same synchronous turn so a second in-process request
+  // cannot observe inflight=0 on the same account. JS is single-threaded;
+  // yielding between pick and increment is what lets two pipelines collide.
+  const winnerId = winner.target.connectionId ?? "";
+  if (winnerId) incrementInflight(winnerId);
   const unusedSelected = selected
     .filter((_, i) => i !== pickIndex)
     .slice()

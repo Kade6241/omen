@@ -127,10 +127,10 @@ export interface ResolvedComboTargetPipeline {
   /**
    * Idempotent release for the in-flight slot reserved for the winner.
    * Non-null for `quota-share` (reserved inside selectQuotaShareTarget) and for
-   * `quota-weighted` (reserved here on the post-stickiness/cache [0], so a sticky
-   * pin cannot charge the wrong account). The host MUST invoke it when the
-   * request settles; this pipeline already releases it on any earlyResponse it
-   * produces after selection.
+   * `quota-weighted` (reserved in the orderer on the draw, then transferred here
+   * if stickiness/cache moves [0]). The host MUST invoke it when the request
+   * settles; this pipeline already releases it on any earlyResponse it produces
+   * after selection.
    */
   quotaShareRelease: (() => void) | null;
 }
@@ -751,6 +751,7 @@ export async function resolveComboTargetPipeline(
   if ("earlyResponse" in ordering) return ordering;
   const { autoUsedExplicitRouter } = ordering;
   let { quotaShareRelease } = ordering;
+  const drawnId = ordering.orderedTargets[0]?.connectionId ?? "";
 
   const continuity = await applyContinuityFilters(deps, ordering.orderedTargets);
   if ("earlyResponse" in continuity) {
@@ -767,18 +768,30 @@ export async function resolveComboTargetPipeline(
     autoUsedExplicitRouter
   );
 
-  // quota-weighted reserves AFTER stickiness/cache so the slot matches the
-  // account that will actually be dispatched. quota-share already reserved
-  // inside selectQuotaShareTarget and must not be double-counted.
-  if (strategy === "quota-weighted" && !quotaShareRelease) {
-    const winnerId = orderedTargets[0]?.connectionId ?? "";
-    if (winnerId) {
-      incrementInflight(winnerId);
+  // quota-weighted already reserved the draw inside the orderer (same
+  // synchronous turn as the pick) so two in-process pipelines cannot both
+  // see inflight=0. Stickiness / prompt-cache may still move [0]; transfer
+  // the slot so the reserved account is the one that will be dispatched.
+  // quota-share reserved inside selectQuotaShareTarget and must not be
+  // double-counted or stolen by this transfer.
+  if (strategy === "quota-weighted") {
+    const finalId = orderedTargets[0]?.connectionId ?? "";
+    if (quotaShareRelease && drawnId && finalId && finalId !== drawnId) {
+      quotaShareRelease();
+      incrementInflight(finalId);
       let released = false;
       quotaShareRelease = () => {
         if (released) return;
         released = true;
-        decrementInflight(winnerId);
+        decrementInflight(finalId);
+      };
+    } else if (!quotaShareRelease && finalId) {
+      incrementInflight(finalId);
+      let released = false;
+      quotaShareRelease = () => {
+        if (released) return;
+        released = true;
+        decrementInflight(finalId);
       };
     }
   }

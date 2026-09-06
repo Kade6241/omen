@@ -19,18 +19,19 @@ import {
   sortTargetsByCost,
   sortTargetsByUsage,
 } from "./targetSorters.ts";
+import { decrementInflight } from "./quotaShareInflight.ts";
 import type { ComboLike, ComboLogger, ResolvedComboTarget } from "./types.ts";
 
 /**
  * Result of {@link applyStrategyOrdering}.
  *
  * `quotaShareRelease` carries the idempotent release for the in-flight slot that
- * quota-share ordering reserves for its winner (#11371). It is non-null only when
- * the `quota-share` strategy ran; `quota-weighted` reserves later in
- * resolveComboTargetPipeline (after stickiness) and leaves this null. The caller
- * MUST invoke it exactly once when the request settles — selection reserves the
- * slot, so dropping the callback leaks the counter monotonically upward and
- * degenerates P2C into "fewest lifetime dispatches".
+ * quota-share and quota-weighted reserve for their winner. quota-share reserves
+ * inside selectQuotaShareTarget; quota-weighted reserves inside the orderer so
+ * two in-process draws cannot both see inflight=0. Stickiness may then move [0];
+ * resolveComboTargetPipeline transfers the slot when that happens. The caller
+ * MUST invoke the callback exactly once when the request settles — dropping it
+ * leaks the counter and degenerates later draws toward whoever looks idle.
  */
 export interface ApplyStrategyOrderingResult {
   orderedTargets: ResolvedComboTarget[];
@@ -249,6 +250,15 @@ export async function applyStrategyOrdering(
       log,
       apiKeyAllowedConnections
     );
+    const winnerId = orderedTargets[0]?.connectionId ?? "";
+    if (winnerId) {
+      let released = false;
+      quotaShareRelease = () => {
+        if (released) return;
+        released = true;
+        decrementInflight(winnerId);
+      };
+    }
     log.info(
       "COMBO",
       `Quota-weighted ordering: ${orderedTargets[0]?.modelStr}${orderedTargets[0]?.connectionId ? ` (${orderedTargets[0].connectionId})` : ""} first`
