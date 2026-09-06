@@ -37,6 +37,8 @@ export default defineConfig({
       // in this jsdom job. They have their own runners + vitest.e2e-live.config.ts.
       "tests/e2e/ecosystem.test.ts",
       "tests/e2e/protocol-clients.test.ts",
+      // Node's dashboard test phase owns this node:test suite.
+      "tests/unit/dashboard/ComboSortSelect.test.tsx",
       // ── Pre-existing failures tracked by #8618 ───────────────────────────────
       "open-sse/services/autoCombo/__tests__/providerDiversity.test.ts", // #8618 — pre-existing failure; remove this exclusion when fixed
       "tests/unit/ui/compareView.test.tsx", // #8618 — pre-existing failure; remove this exclusion when fixed
