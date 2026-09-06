@@ -13,15 +13,15 @@ const BetterSqlite3 = require_("better-sqlite3") as typeof import("better-sqlite
 import { createBetterSqliteAdapter } from "../../src/lib/db/adapters/betterSqliteAdapter";
 import type { SqliteAdapter } from "../../src/lib/db/adapters/types";
 
-const MIGRATION_173_PATH = path.resolve(
+const MIGRATION_174_PATH = path.resolve(
   import.meta.dirname ?? ".",
-  "../../src/lib/db/migrations/173_server_tool_executions.sql"
+  "../../src/lib/db/migrations/174_server_tool_executions.sql"
 );
-const MIGRATION_173_SQL = fs.readFileSync(MIGRATION_173_PATH, "utf8");
+const MIGRATION_174_SQL = fs.readFileSync(MIGRATION_174_PATH, "utf8");
 
-// Minimal pre-173 fixture: only skills + skill_executions tables.
+// Minimal pre-174 fixture: only skills + skill_executions tables.
 // No SCHEMA_SQL import from core.ts, no runMigrations.
-const PRE_173_FIXTURE = `
+const PRE_174_FIXTURE = `
   CREATE TABLE IF NOT EXISTS skills (
     id TEXT PRIMARY KEY,
     api_key_id TEXT NOT NULL,
@@ -56,7 +56,7 @@ function makeTempDb(): {
   dir: string;
   raw: import("better-sqlite3").Database;
 } {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "migration-173-test-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "migration-174-test-"));
   const dbPath = path.join(dir, "test.db");
   const raw = new BetterSqlite3(dbPath);
   raw.pragma("journal_mode = WAL");
@@ -69,11 +69,11 @@ function makeTempDb(): {
       applied_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
   `);
-  // Apply minimal pre-173 fixture (skills + skill_executions only)
-  raw.exec(PRE_173_FIXTURE);
-  // Apply migration 173 via raw.exec (real SQL, twice for idempotency)
-  raw.exec(MIGRATION_173_SQL);
-  raw.exec(MIGRATION_173_SQL);
+  // Apply minimal pre-174 fixture (skills + skill_executions only)
+  raw.exec(PRE_174_FIXTURE);
+  // Apply migration 174 via raw.exec (real SQL, twice for idempotency)
+  raw.exec(MIGRATION_174_SQL);
+  raw.exec(MIGRATION_174_SQL);
   const adapter = createBetterSqliteAdapter(raw);
   return { adapter, dir, raw };
 }
@@ -94,9 +94,9 @@ function getIndexInfo(raw: import("better-sqlite3").Database, table: string) {
   }>;
 }
 
-// ── Migration 173 tests ──
+// ── Migration 174 tests ──
 
-test("migration 173: server_tool_executions table exists with correct columns", (_, done) => {
+test("migration 174: server_tool_executions table exists with correct columns", (_, done) => {
   const { raw, dir } = makeTempDb();
   try {
     const tables = raw.pragma("table_list") as Array<{ name: string }>;
@@ -123,7 +123,7 @@ test("migration 173: server_tool_executions table exists with correct columns", 
   }
 });
 
-test("migration 173: UNIQUE constraint on (api_key_id, request_identity, tool_call_id)", (_, done) => {
+test("migration 174: UNIQUE constraint on (api_key_id, request_identity, tool_call_id)", (_, done) => {
   const { raw, dir } = makeTempDb();
   try {
     raw.exec(`
@@ -145,7 +145,7 @@ test("migration 173: UNIQUE constraint on (api_key_id, request_identity, tool_ca
   }
 });
 
-test("migration 173: two indexes exist on server_tool_executions", (_, done) => {
+test("migration 174: two indexes exist on server_tool_executions", (_, done) => {
   const { raw, dir } = makeTempDb();
   try {
     const indexes = getIndexInfo(raw, "server_tool_executions");
@@ -165,7 +165,7 @@ test("migration 173: two indexes exist on server_tool_executions", (_, done) => 
   }
 });
 
-test("migration 173: existing skill_executions data preserved after migration", (_, done) => {
+test("migration 174: existing skill_executions data preserved after migration", (_, done) => {
   const { raw, dir } = makeTempDb();
   try {
     // Insert a skill to satisfy FK
@@ -178,7 +178,7 @@ test("migration 173: existing skill_executions data preserved after migration", 
       VALUES ('old_exec','s1','k1','{"q":"test"}','success')
     `);
     const rows = raw.prepare("SELECT * FROM skill_executions WHERE id = 'old_exec'").all();
-    assert.equal(rows.length, 1, "old row should exist after migration 173");
+    assert.equal(rows.length, 1, "old row should exist after migration 174");
   } finally {
     raw.close();
     fs.rmSync(dir, { recursive: true, force: true });
@@ -186,7 +186,7 @@ test("migration 173: existing skill_executions data preserved after migration", 
   }
 });
 
-test("migration 173: skill_executions still enforces skill_id NOT NULL", (_, done) => {
+test("migration 174: skill_executions still enforces skill_id NOT NULL", (_, done) => {
   const { raw, dir } = makeTempDb();
   try {
     assert.throws(() => {
@@ -202,7 +202,7 @@ test("migration 173: skill_executions still enforces skill_id NOT NULL", (_, don
   }
 });
 
-test("migration 173: custom skill execution write still works after migration", (_, done) => {
+test("migration 174: custom skill execution write still works after migration", (_, done) => {
   const { raw, dir } = makeTempDb();
   try {
     // Insert a skill to satisfy FK
@@ -215,7 +215,7 @@ test("migration 173: custom skill execution write still works after migration", 
       VALUES ('new_exec','s2','k1','{"q":"test2"}','success')
     `);
     const allRows = raw.prepare("SELECT * FROM skill_executions").all();
-    assert.ok(allRows.length >= 1, "should read skill_executions after migration 173");
+    assert.ok(allRows.length >= 1, "should read skill_executions after migration 174");
   } finally {
     raw.close();
     fs.rmSync(dir, { recursive: true, force: true });
@@ -223,7 +223,7 @@ test("migration 173: custom skill execution write still works after migration", 
   }
 });
 
-test("migration 173: idempotent — running twice does not error or duplicate", (_, done) => {
+test("migration 174: idempotent — running twice does not error or duplicate", (_, done) => {
   const { raw, dir } = makeTempDb();
   try {
     // makeTempDb already runs the SQL twice; verify no error and table exists

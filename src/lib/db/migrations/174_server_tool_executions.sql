@@ -1,4 +1,4 @@
--- Migration 173: Durable server tool execution fence table.
+-- Migration 174: Durable server tool execution fence table.
 -- Tracks claim/result state for server-owned tool calls to prevent duplicate execution
 -- across retries and concurrent requests. Independent of skill_executions.
 
