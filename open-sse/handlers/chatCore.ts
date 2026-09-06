@@ -106,6 +106,7 @@ import {
 } from "./chatCore/passthroughHelpers.ts";
 import { recoverAnthropicThinkingSignature } from "./chatCore/thinkingSignatureRecovery.ts";
 import { runProviderExecutionPipeline } from "./chatCore/providerExecutionPipeline.ts";
+import { runNonStreamingProviderLeg } from "./chatCore/nonStreamingProviderLeg.ts";
 import { markCodexScopeRateLimited } from "./chatCore/codexFailover.ts";
 import { deleteSessionAccountAffinity } from "@/lib/db/sessionAccountAffinity";
 import {
@@ -147,7 +148,6 @@ import {
   createSSETransformStreamWithLogger,
   createPassthroughStreamWithLogger,
   COLORS,
-  withBodyTimeout,
 } from "../utils/stream.ts";
 import { ensureStreamReadiness } from "../utils/streamReadiness.ts";
 import { resolveSuppressThinkClose, THINKING_MARKER_HEADER } from "../utils/thinkCloseMarker.ts";
@@ -155,7 +155,7 @@ import { resolveStreamReadinessTimeout } from "../utils/streamReadinessPolicy.ts
 import { resolveAgentGoalPolicy } from "../utils/agentGoalPolicy.ts";
 import { createStreamController } from "../utils/streamHandler.ts";
 import * as streamFailure from "../utils/streamFailureFinalization.ts";
-import { normalizeUsage, sanitizeUsagePayloadForRequest } from "../utils/usageTracking.ts";
+import { normalizeUsage } from "../utils/usageTracking.ts";
 import {
   refreshWithRetry,
   isUnrecoverableRefreshError,
@@ -249,7 +249,6 @@ import {
 import {
   classifyProviderError,
   PROVIDER_ERROR_TYPES,
-  isEmptyContentResponse,
 } from "../services/errorClassifier.ts";
 import { updateProviderConnection, getProviderConnectionById } from "@/lib/db/providers";
 import { wasRefreshTokenRotated } from "@omniroute/open-sse/services/refreshSerializer.ts";
@@ -295,7 +294,6 @@ import { calculateCost } from "@/lib/usage/costCalculator";
 import {
   buildClaudePassthroughToolNameMap,
   mergeResponseToolNameMap,
-  restoreNonStreamingToolNames,
 } from "./chatCore/passthroughToolNames.ts";
 import {
   createDisabledCompressionConfig,
@@ -326,11 +324,7 @@ import {
 import { scheduleStreamingQuotaShareConsumption } from "./chatCore/streamingQuotaShare.ts";
 import { recordStreamingUsageStats } from "./chatCore/streamingUsageStats.ts";
 import { recordStreamingCost } from "./chatCore/streamingCost.ts";
-import {
-  isJsonRecord,
-  parseNonStreamingResponseBody,
-} from "./chatCore/nonStreamingResponseParse.ts";
-import { unwrapClinepassEnvelope } from "../utils/clinepassEnvelope.ts";
+import { isJsonRecord } from "./chatCore/nonStreamingResponseParse.ts";
 import { recordNonStreamingUsageStats } from "./chatCore/nonStreamingUsageStats.ts";
 import {
   normalizeExecutorResult,
@@ -369,9 +363,7 @@ import { persistCodexChildQuotaResponse } from "../services/codexAccount/index.t
 import { invalidateCodexQuotaCache } from "../services/codexQuotaFetcher.ts";
 import { invalidateGenericQuotaCacheOnStatus } from "../services/genericQuotaFetcher.ts";
 import { translateNonStreamingResponse } from "./responseTranslator.ts";
-import { translateNonStreamingClientResponse } from "./chatCore/nonStreamingClientTranslate.ts";
 import { extractToolSchemaMap } from "../translator/response/openai-responses/toolSchemas.ts";
-import { unwrapClineNonStreamingEnvelope } from "./chatCore/clineResponseEnvelope.ts";
 import { extractUsageFromResponse } from "./usageExtractor.ts";
 import {
   withRateLimit,
@@ -3616,6 +3608,7 @@ export async function handleChatCore({
   let claudePromptCacheLogMeta = null;
 
   let pipelineRecovered = false;
+  if (stream) {
   try {
     const pipelineOutcome = await runProviderExecutionPipeline({
       policy: {
@@ -4743,220 +4736,209 @@ export async function handleChatCore({
     }
     // ── End T5 ───────────────────────────────────────────────────────────────
   }
+  }
 
   // Non-streaming response
   if (!stream) {
-    const parsed = await parseNonStreamingResponseBody({
-      providerResponse,
-      upstreamStream,
-      providerHeaders,
-      finalBody,
+    try {
+    const legResult = await runNonStreamingProviderLeg({
+      phase: "initial",
+      sourceBody: (body || {}) as Record<string, unknown>,
+      expectedConnectionId: managedLease
+        ? String(getCurrentConnectionId() || connectionId || "") || undefined
+        : undefined,
+      allowAccountRotation: !managedLease && comboStrategy !== "context-relay",
+      allowModelFallback: true,
+      executeProviderRequest: (modelToCall, allowDedup) =>
+        executeProviderRequest(modelToCall, allowDedup),
+      runProviderExecution: async ({ policy, model: pipelineModel, translatedBody: wireBody }) => {
+        translatedBody = wireBody as typeof translatedBody;
+        currentModel = pipelineModel;
+        triedModels.add(pipelineModel);
+        return runProviderExecutionPipeline({
+          policy,
+          target: {
+            provider,
+            requestedModel: pipelineModel,
+            sourceFormat,
+            targetFormat,
+            stream: false,
+          },
+          connection: {
+            initialConnectionId: String(getCurrentConnectionId() || connectionId || ""),
+            getCurrentConnectionId: () => getCurrentConnectionId() || undefined,
+            getCredentials: () => (credentials || {}) as Record<string, unknown>,
+            replaceCredentials: (next) => {
+              Object.assign(credentials, next);
+            },
+            onCredentialsRefreshed: async () => {},
+            assertManagedLeaseFence: (id) => {
+              assertManagedLeaseFence(id);
+            },
+            getProviderCredentials,
+          },
+          wire: {
+            body: translatedBody as Record<string, unknown>,
+            currentModel,
+            triedModels,
+            setBodyAndModel: (nextBody, nextModel) => {
+              translatedBody = nextBody as typeof translatedBody;
+              currentModel = nextModel;
+              triedModels.add(nextModel);
+            },
+          },
+          state: {
+            updatePendingStage: (stage, data) => {
+              updatePendingScope(pendingScope, { stage, ...(data || {}) });
+            },
+            recordRateLimitHeaders: updateFromHeaders,
+            recordRateLimitBody: updateFromResponseBody,
+            writeTerminalStatus,
+            persistConnectionPatch: updateProviderConnection,
+            setConnectionRateLimitedUntil: async (id, untilMs) => {
+              const { setConnectionRateLimitUntil } = await import("@/lib/db/providers");
+              setConnectionRateLimitUntil(id, untilMs);
+            },
+            lockModel,
+            recordAntigravityQuotaState: recordCoreOwnedAntigravityQuotaState,
+            markAccountSemaphoreBlocked: (key) => {
+              markAccountSemaphoreBlocked(key, Date.now() + 60_000);
+            },
+            isolateProbeFailures: () => shouldIsolateProbeFailures(),
+            onCodexScopeRateLimited: async (params) => {
+              await markCodexScopeRateLimited({
+                failedConnectionId: params.failedConnectionId,
+                model: params.model,
+                rateLimitedUntil: params.rateLimitedUntil,
+                credentials: (params.credentials || credentials) as {
+                  connectionId?: string | null;
+                  providerSpecificData?: unknown;
+                },
+              });
+            },
+            onClearSessionAffinity: () => {
+              const key =
+                sessionAffinityKey ||
+                extractSessionAffinityKey(body, clientRawRequest?.headers) ||
+                null;
+              if (!key) return;
+              try {
+                deleteSessionAccountAffinity(key, "codex");
+              } catch {
+                // best-effort
+              }
+            },
+            onAuditAccountRotation: (params) => {
+              logAuditEvent({
+                action: params.action,
+                actor: apiKeyInfo?.name || "system",
+                target: params.newConnectionId,
+                details: {
+                  failed_connection_id: params.failedConnectionId,
+                  new_connection_id: params.newConnectionId,
+                  attempt: params.attempt,
+                  retry_after_ms: params.retryAfterMs,
+                },
+              });
+            },
+          },
+          sendProviderAttempt: (modelToCall, allowDedup) =>
+            executeProviderRequest(modelToCall, allowDedup),
+        });
+      },
+      setRequestWireState: ({ translatedBody: nextBody, effectiveModel: nextModel }) => {
+        translatedBody = nextBody as typeof translatedBody;
+        currentModel = nextModel;
+        triedModels.add(nextModel);
+      },
+      sourceFormat,
       targetFormat,
-      model,
+      clientResponseFormat,
+      provider,
+      model: effectiveModel,
+      connectionId: String(getCurrentConnectionId() || connectionId || ""),
+      getCurrentConnectionId: () => getCurrentConnectionId() || undefined,
+      effectiveModel: currentModel,
+      translatedBody: translatedBody as Record<string, unknown>,
+      toolNameMap,
+      requestToolIdentityMap,
+      reasoningCacheScope,
+      clientHeaders: clientRawRequest?.headers ?? null,
+      isClaudeCodeCompatible,
       log,
     });
-    const normalizedProviderPayload = parsed.normalizedProviderPayload;
-    const looksLikeSSE = parsed.looksLikeSSE;
 
-    if (parsed.kind === "invalid_sse") {
-      appendRequestLog({
-        model,
-        provider,
-        connectionId,
-        status: `FAILED ${HTTP_STATUS.BAD_GATEWAY}`,
-      }).catch(() => {});
-      const invalidSseMessage = parsed.message;
-      persistAttemptLogs({
-        status: HTTP_STATUS.BAD_GATEWAY,
-        error: invalidSseMessage,
-        providerRequest: finalBody || translatedBody,
-        providerResponse: normalizedProviderPayload,
-        clientResponse: buildErrorBody(HTTP_STATUS.BAD_GATEWAY, invalidSseMessage),
-        cacheSource: "upstream",
-      });
-      persistFailureUsage(HTTP_STATUS.BAD_GATEWAY, "invalid_sse_payload");
-      trackPendingRequest(model, provider, pendingConnId, false);
-      return createErrorResult(HTTP_STATUS.BAD_GATEWAY, invalidSseMessage);
-    }
-
-    if (parsed.kind === "invalid_json") {
-      appendRequestLog({
-        model,
-        provider,
-        connectionId,
-        status: `FAILED ${HTTP_STATUS.BAD_GATEWAY}`,
-      }).catch(() => {});
-      const detailedError = parsed.detailedError;
-      const invalidJsonMessage = parsed.message;
-      persistAttemptLogs({
-        status: HTTP_STATUS.BAD_GATEWAY,
-        error: detailedError,
-        providerRequest: finalBody || translatedBody,
-        providerResponse: normalizedProviderPayload,
-        clientResponse: buildErrorBody(HTTP_STATUS.BAD_GATEWAY, invalidJsonMessage),
-        cacheSource: "upstream",
-      });
-      persistFailureUsage(HTTP_STATUS.BAD_GATEWAY, "invalid_json_payload");
-      trackPendingRequest(model, provider, connectionId, false);
-      return createErrorResult(HTTP_STATUS.BAD_GATEWAY, invalidJsonMessage);
-    }
-
-    let responseBody = parsed.responseBody;
-    let responsePayloadFormat = parsed.responsePayloadFormat;
-
-    // ── ClinePass {success,data} envelope unwrap (before translation) ──────────
-    // ClinePass wraps non-streaming JSON in a {success, data} envelope; errors
-    // use {success:false, error}. Transient {success:false, error:"empty..."}
-    // responses get one 2s retry before surfacing. CLINEPASS-GATED — untouched
-    // for every other provider. Envelope errors route through createErrorResult
-    // (→ buildErrorBody/sanitizeErrorMessage, Rule #12).
-    if (provider === "clinepass") {
-      let { body: unwrapped, error: envError } = unwrapClinepassEnvelope(responseBody, provider);
-      if (envError && /empty/i.test(envError.message || "")) {
-        log?.warn?.("RETRY", "clinepass returned empty content, retrying once after 2s");
-        await new Promise((r) => setTimeout(r, 2000));
-        try {
-          const retryResult = await executeProviderRequest(effectiveModel, false);
-          if (retryResult?.response?.ok) {
-            const retryParsed = await parseNonStreamingResponseBody({
-              providerResponse: retryResult.response,
-              upstreamStream: undefined,
-              providerHeaders: retryResult.headers,
-              finalBody: retryResult.transformedBody,
-              targetFormat,
-              model,
-              log,
-            });
-            if (retryParsed.kind !== "invalid_sse" && retryParsed.kind !== "invalid_json") {
-              providerResponse = retryResult.response;
-              providerUrl = retryResult.url;
-              providerHeaders = retryResult.headers;
-              finalBody = providerRequestCapture.body(retryResult.transformedBody);
-              ({ body: unwrapped, error: envError } = unwrapClinepassEnvelope(
-                retryParsed.responseBody,
-                provider
-              ));
-            }
-          }
-        } catch (retryErr) {
-          log?.warn?.(
-            "RETRY",
-            `clinepass retry failed: ${
-              retryErr instanceof Error ? retryErr.message : String(retryErr)
-            }`
-          );
-        }
+    if (legResult.kind === "error") {
+      const err = legResult.result;
+      const captured = providerRequestCapture.latest?.() ?? null;
+      finalBody = captured?.body ?? finalBody ?? translatedBody;
+      if (captured) {
+        reqLogger.logTargetRequest(captured.url, captured.headers, captured.body);
       }
-      if (envError) {
-        appendRequestLog({
-          model,
-          provider,
-          connectionId,
-          status: `FAILED ${HTTP_STATUS.BAD_GATEWAY}`,
-        }).catch(() => {});
-        persistFailureUsage(HTTP_STATUS.BAD_GATEWAY, "clinepass_envelope_error");
-        trackPendingRequest(model, provider, connectionId, false);
-        return createErrorResult(HTTP_STATUS.BAD_GATEWAY, envError.message);
-      }
-      if (!isJsonRecord(unwrapped)) {
-        const invalidEnvelopeMessage = "Invalid JSON response from provider";
-        persistFailureUsage(HTTP_STATUS.BAD_GATEWAY, "clinepass_envelope_error");
-        trackPendingRequest(model, provider, connectionId, false);
-        return createErrorResult(HTTP_STATUS.BAD_GATEWAY, invalidEnvelopeMessage);
-      }
-      responseBody = unwrapped;
-    }
-    responseBody = unwrapClineNonStreamingEnvelope(provider, responseBody);
-
-    // Check for empty content response (fake success) - trigger fallback
-    if (isEmptyContentResponse(responseBody)) {
-      appendRequestLog({
-        model,
-        provider,
-        connectionId,
-        status: `FAILED ${HTTP_STATUS.BAD_GATEWAY}`,
-      }).catch(() => {});
-      const emptyContentMessage = "Provider returned empty content";
-      persistAttemptLogs({
-        status: HTTP_STATUS.BAD_GATEWAY,
-        error: emptyContentMessage,
-        providerRequest: finalBody || translatedBody,
-        providerResponse: normalizedProviderPayload,
-        clientResponse: buildErrorBody(HTTP_STATUS.BAD_GATEWAY, emptyContentMessage),
-        cacheSource: "upstream",
-      });
-      persistFailureUsage(HTTP_STATUS.BAD_GATEWAY, "empty_content");
-
-      // Trigger non-recursive fallback for empty content
-      const nextModel = getNextFamilyFallback(currentModel, triedModels, provider);
-      if (nextModel) {
-        triedModels.add(nextModel);
-        currentModel = nextModel;
-        translatedBody.model = nextModel;
-        log?.info?.(
-          "EMPTY_CONTENT_FALLBACK",
-          `${model} returned empty content → trying ${nextModel}`
+      reqLogger.logError(new Error(err.error || "Provider request failed"), finalBody);
+      const isNetworkThrow = Boolean(err.originalError);
+      if (err.response && !isNetworkThrow) {
+        reqLogger.logProviderResponse(
+          err.status,
+          err.response.statusText || "Error",
+          err.response.headers,
+          err.response
         );
-        try {
-          const fallbackResult = await executeProviderRequest(nextModel, false);
-          if (fallbackResult.response.ok) {
-            const fallbackRaw = await withBodyTimeout<string>(fallbackResult.response.text());
-            try {
-              responseBody = fallbackRaw ? JSON.parse(fallbackRaw) : {};
-              providerUrl = fallbackResult.url;
-              providerHeaders = fallbackResult.headers;
-              finalBody = providerRequestCapture.body(fallbackResult.transformedBody);
-              reqLogger.logTargetRequest(providerUrl, providerHeaders, finalBody);
-              log?.info?.(
-                "EMPTY_CONTENT_FALLBACK",
-                `Serving ${nextModel} as fallback for ${model}`
-              );
-              // Fall through — continue processing with the new responseBody
-            } catch {
-              trackPendingRequest(model, provider, connectionId, false);
-              return createErrorResult(HTTP_STATUS.BAD_GATEWAY, emptyContentMessage);
-            }
-          } else {
-            trackPendingRequest(model, provider, connectionId, false);
-            return createErrorResult(HTTP_STATUS.BAD_GATEWAY, emptyContentMessage);
-          }
-        } catch {
-          trackPendingRequest(model, provider, connectionId, false);
-          return createErrorResult(HTTP_STATUS.BAD_GATEWAY, emptyContentMessage);
-        }
-      } else {
-        trackPendingRequest(model, provider, connectionId, false);
-        return createErrorResult(HTTP_STATUS.BAD_GATEWAY, emptyContentMessage);
       }
+      appendRequestLog({
+        model,
+        provider,
+        connectionId,
+        status: `FAILED ${err.status}`,
+      }).catch(() => {});
+      persistAttemptLogs({
+        status: err.status,
+        error: err.error || "Provider request failed",
+        providerRequest: finalBody || translatedBody,
+        providerResponse: isNetworkThrow ? undefined : err.response,
+        clientResponse: buildErrorBody(err.status, err.error || "Provider request failed"),
+        cacheSource: "upstream",
+      });
+      persistFailureUsage(
+        err.status,
+        err.errorCode || `upstream_${err.status}`
+      );
+      trackPendingRequest(model, provider, connectionId, false);
+      return err;
     }
 
-    const restoreClaudeNames = sourceFormat === FORMATS.CLAUDE && targetFormat === FORMATS.CLAUDE;
-    let responseToolNameMap: Map<string, string> | null;
-    [responseBody, responseToolNameMap] = restoreNonStreamingToolNames(
-      responseBody,
-      toolNameMap,
-      finalBody,
-      restoreClaudeNames
+    pipelineRecovered = true;
+    if (legResult.upstreamResponse) {
+      providerResponse = legResult.upstreamResponse;
+      providerHeaders = normalizeHeaders(legResult.upstreamResponse.headers);
+    } else {
+      providerResponse = new Response(null, {
+        status: 200,
+        headers: legResult.headers,
+      });
+      providerHeaders = normalizeHeaders(legResult.headers);
+    }
+    finalBody = providerRequestCapture.body(legResult.providerRequest || translatedBody);
+    const capturedOk = providerRequestCapture.latest?.();
+    reqLogger.logTargetRequest(
+      legResult.requestUrl || capturedOk?.url || "",
+      legResult.requestHeaders || capturedOk?.headers || {},
+      capturedOk?.body ?? finalBody
     );
+    const responseBody = legResult.providerBody;
+    const responsePayloadFormat = legResult.responsePayloadFormat;
+    const looksLikeSSE = legResult.looksLikeSSE;
+    let translatedResponse = legResult.response;
+    const memoryExtractionResponse = legResult.responseForMemoryExtraction;
     reqLogger.logProviderResponse(
-      providerResponse.status,
-      providerResponse.statusText,
+      200,
+      "OK",
       providerResponse.headers,
       looksLikeSSE
-        ? {
-            _streamed: true,
-            _format: "sse-json",
-            summary: responseBody,
-          }
+        ? { _streamed: true, _format: "sse-json", summary: responseBody }
         : responseBody
     );
-    sanitizeUsagePayloadForRequest(
-      responseBody,
-      finalBody || translatedBody || body,
-      responsePayloadFormat
-    );
     effectiveServiceTier = resolveReportedServiceTier(responseBody) ?? effectiveServiceTier;
-    // Notify success - caller can clear error status if needed
     if (onRequestSuccess) {
       await onRequestSuccess();
     }
@@ -4967,12 +4949,10 @@ export async function handleChatCore({
       providerSpecificData: credentials?.providerSpecificData,
       log,
     });
-
-    // Log usage for non-streaming responses
     const usage = extractUsageFromResponse(responseBody, provider);
+    const cacheUsageLogMeta = buildCacheUsageLogMeta(usage);
     if (usage && typeof usage === "object") {
       attachCompressionUsageReceiptAfterAnalytics(usage as Record<string, unknown>, "provider");
-      // Track Gemini token consumption for TPM rate-limit pre-check
       if (provider === "gemini") {
         const promptTokens =
           typeof (usage as Record<string, unknown>).prompt_tokens === "number"
@@ -4981,10 +4961,6 @@ export async function handleChatCore({
         if (promptTokens > 0) incrementTokenUsage(model, promptTokens);
       }
     }
-
-    // Context Editing telemetry: when the delegated server-side clear actually ran,
-    // record the provider's cleared-token receipt under engine "context-editing" so
-    // it surfaces in compression analytics. Best-effort, Claude-only, non-streaming.
     recordContextEditingTelemetryHook({
       contextEditingEnabled,
       provider,
@@ -4999,9 +4975,6 @@ export async function handleChatCore({
       tokens: usage,
       status: "200 OK",
     }).catch(() => {});
-
-    // Save structured call log with full payloads
-    const cacheUsageLogMeta = buildCacheUsageLogMeta(usage);
     recordNonStreamingUsageStats(usage, {
       traceEnabled,
       provider,
@@ -5014,27 +4987,6 @@ export async function handleChatCore({
       comboStrategy,
       endpoint: endpointPath,
     });
-
-    // Translate response to client's expected format (usually OpenAI)
-    // Pass toolNameMap so Claude OAuth proxy_ prefix is stripped in tool_use blocks (#605)
-    const clientTranslate = translateNonStreamingClientResponse({
-      responseBody,
-      responsePayloadFormat,
-      clientResponseFormat,
-      sourceFormat,
-      provider,
-      model,
-      requestBody: finalBody || translatedBody || body,
-      historyMessages: (translatedBody as { messages?: unknown[] } | null | undefined)?.messages,
-      responseToolNameMap,
-      requestToolIdentityMap,
-      reasoningCacheScope,
-      clientHeaders: clientRawRequest?.headers ?? null,
-      isClaudeCodeCompatible,
-      phase: "final",
-    });
-    let translatedResponse = clientTranslate.response;
-    const memoryExtractionResponse = clientTranslate.responseForMemoryExtraction;
 
     // #12150 P1b surface 3 (fix round 1): a video-bridge-observed request's
     // request- AND response-derived text both carry the full transcript (the
@@ -5356,6 +5308,35 @@ export async function handleChatCore({
       success: true,
       response: buildNonStreamingJsonResponse(translatedResponse, responseHeaders),
     };
+    } catch (error) {
+      trackPendingRequest(model, provider, connectionId, false);
+      if (isManagedLeaseFenceError(error)) return managedLeaseFenceErrorResult(error);
+      if (isSemaphoreCapacityError(error)) {
+        appendRequestLog({
+          model,
+          provider,
+          connectionId,
+          status: `FAILED ${error.code}`,
+        }).catch(() => {});
+        const failureMessage = error.message || "Semaphore timeout";
+        persistAttemptLogs({
+          status: HTTP_STATUS.RATE_LIMITED,
+          error: failureMessage,
+          providerRequest: finalBody || translatedBody,
+          clientResponse: buildErrorBody(HTTP_STATUS.RATE_LIMITED, failureMessage),
+          claudeCacheMeta: claudePromptCacheLogMeta,
+          cacheSource: "upstream",
+        });
+        persistFailureUsage(HTTP_STATUS.RATE_LIMITED, error.code);
+        const result = createErrorResult(HTTP_STATUS.RATE_LIMITED, failureMessage);
+        return {
+          ...result,
+          errorType: "account_semaphore_capacity",
+          errorCode: error.code,
+        };
+      }
+      throw error;
+    }
   }
 
   // Streaming response

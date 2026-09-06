@@ -41,6 +41,9 @@ export interface ChatCoreErrorResult {
   error?: string;
   errorCode?: string;
   errorType?: string;
+  retryAfterMs?: number;
+  originalError?: unknown;
+  rawMessage?: string;
 }
 
 export type NonStreamingProviderLegResult =
@@ -55,6 +58,9 @@ export type NonStreamingProviderLegResult =
       looksLikeSSE: boolean;
       connectionId: string;
       headers: Headers;
+      requestHeaders?: Record<string, string>;
+      requestUrl?: string;
+      upstreamResponse?: Response;
       receipt: ProviderLegReceipt;
     }
   | {
