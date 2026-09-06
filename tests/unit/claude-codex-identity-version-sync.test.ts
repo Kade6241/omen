@@ -59,7 +59,33 @@ test("Claude CLI wire versions match the captured 2.1.258 binary", () => {
   assert.equal(hdr.CLAUDE_CLI_BILLING_VERSION, canonical.CLAUDE_CODE_CLIENT_BILLING_VERSION);
 });
 
-test("Codex client version locksteps Dockerfile @openai/codex and env override", () => {
+async function withEnv<T>(
+  entries: Record<string, string | undefined>,
+  fn: () => T | Promise<T>
+): Promise<T> {
+  const previous = new Map<string, string | undefined>();
+  for (const [key, value] of Object.entries(entries)) {
+    previous.set(key, process.env[key]);
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+  try {
+    return await fn();
+  } finally {
+    for (const [key, value] of previous.entries()) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
+
+test("Codex client version locksteps Dockerfile @openai/codex", () => {
   const dockerfile = fs.readFileSync(path.join(process.cwd(), "Dockerfile"), "utf8");
   const match = dockerfile.match(/@openai\/codex@([0-9]+\.[0-9]+\.[0-9]+)/);
   assert.ok(match, "Dockerfile must pin @openai/codex@x.y.z");
@@ -72,6 +98,13 @@ test("Codex client version locksteps Dockerfile @openai/codex and env override",
     codexCfg.getCodexCliRsHeaders()["User-Agent"],
     `codex_cli_rs/${pinned}`,
   );
+});
+
+test("Codex client version env override still wins", async () => {
+  await withEnv({ CODEX_CLIENT_VERSION: "0.99.0" }, () => {
+    assert.equal(codexCfg.getCodexClientVersion(), "0.99.0");
+    assert.equal(codexCfg.getCodexDefaultHeaders().Version, "0.99.0");
+  });
 });
 
 test("test 7: live-empty GitHub catalog path does not call persist", () => {
