@@ -13003,6 +13003,10 @@
       },
       "SKILLS_SANDBOX_NETWORK_ENABLED": {
         "description": "Cho phép môi trường sandbox của kỹ năng truy cập mạng."
+      },
+      "SERVER_OWNED_TOOL_LOOP_ENABLED": {
+        "label": "Vòng lặp công cụ do máy chủ sở hữu",
+        "description": "Tiếp tục các lời gọi công cụ do máy chủ sở hữu ở chế độ không streaming cho đến khi mô hình trả về phản hồi mà máy khách dùng được."
       }
     }
   },
