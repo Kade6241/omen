@@ -128,6 +128,14 @@ test("Dario pool uses bestAccount instead of an exhausted secondary account", ()
   assert.equal(usage.quotas["weekly (7d)"].used, 40);
 });
 
+test("Dario accepts the live routable account status", () => {
+  const usage = buildDarioUsage({
+    accounts: [{ alias: "a", status: "allowed", util5h: 0.1, util7d: 0.2, utilAgeMs: 1 }],
+    bestAccount: "a",
+  });
+  assert.equal(usage.quotas?.["session (5h)"].used, 10);
+});
+
 test("Dario leaves unroutable account states unknown", () => {
   for (const status of ["auth-cooldown", "rejected", "expired", "disabled"]) {
     const usage = buildDarioUsage({

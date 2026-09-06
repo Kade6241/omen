@@ -100,7 +100,11 @@ export function buildDarioUsage(payload: unknown, now: number = Date.now()): Dar
   const root = asRecord(payload);
   const account = root ? selectRepresentativeAccount(root) : null;
   if (!account) return { message: "Dario usage is unavailable" };
-  if (typeof account.status === "string" && account.status !== "healthy") {
+  if (
+    typeof account.status === "string" &&
+    account.status !== "healthy" &&
+    account.status !== "allowed"
+  ) {
     return { message: "Dario usage is unavailable" };
   }
   const ageMs = observationAgeMs(account, now);
