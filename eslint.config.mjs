@@ -227,8 +227,8 @@ const eslintConfig = [
       // their files move mid-scan, so never lint them from the main checkout.
       ".claude/**",
       ".omnivscodeagent/**",
-      // _tasks/ — planning/handoff/research artifacts (gitignored, external code)
-      "_tasks/**",
+      // Root _*/ paths are private, gitignored working data and may contain external configs.
+      "_*/**",
       // .agents/ — skill definitions + their helper scripts (gitignored; the
       // canonical copy lives here and is symlinked into .claude/).
       ".agents/**",
