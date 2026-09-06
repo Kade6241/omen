@@ -7,6 +7,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
+const themeState = vi.hoisted(() => ({ isDark: false }));
+
+vi.mock("@/shared/hooks/useTheme", () => ({
+  useTheme: () => ({ isDark: themeState.isDark }),
+}));
+
 vi.mock("next/image", () => ({
   default: (props: Record<string, unknown>) => {
     const { onError, alt, ...rest } = props as { onError?: () => void; alt?: string } & Record<
@@ -132,6 +138,7 @@ function fireImgError(container: HTMLElement) {
 }
 
 beforeEach(() => {
+  themeState.isDark = false;
   (
     globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }
   ).IS_REACT_ACT_ENVIRONMENT = true;
@@ -229,7 +236,6 @@ describe("ProviderIcon — custom remote icon URL (#2166)", () => {
 describe("ProviderIcon — local SVG dimensions", () => {
   it.each([
     ["cline", "/providers/cline.svg"],
-    ["kimi-coding", "/providers/kimi-logomark-light.svg"],
     ["opper", "/providers/opper.svg"],
   ])("gives %s a definite square layout size", (providerId, expectedSrc) => {
     const container = renderIcon({ providerId, size: 24 });
@@ -241,6 +247,20 @@ describe("ProviderIcon — local SVG dimensions", () => {
     expect(img?.style.objectFit).toBe("contain");
     expect(img?.style.maxWidth).toBe("");
     expect(img?.style.maxHeight).toBe("");
+  });
+
+  it.each([
+    [false, "/providers/kimi-logomark-light.svg"],
+    [true, "/providers/kimi-logomark-dark.svg"],
+  ])("uses the Kimi asset for isDark=%s with a definite square size", (isDark, expectedSrc) => {
+    themeState.isDark = isDark;
+    const container = renderIcon({ providerId: "kimi-coding", size: 24 });
+    const img = container.querySelector(`img[src="${expectedSrc}"]`);
+
+    expect(img).not.toBeNull();
+    expect(img?.style.width).toBe("24px");
+    expect(img?.style.height).toBe("24px");
+    expect(img?.style.objectFit).toBe("contain");
   });
 });
 
