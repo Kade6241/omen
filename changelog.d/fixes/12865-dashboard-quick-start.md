@@ -1,0 +1,1 @@
+- **fix(dashboard):** Keep Quick Start documentation accessible on mobile, improve setup-card spacing and text contrast in both themes, and wrap long endpoint URLs ([#12865](https://github.com/diegosouzapw/OmniRoute/pull/12865)) — thanks @yugui923.

@@ -1,1 +1,0 @@
-- **fix(dashboard):** Keep Quick Start documentation accessible on mobile, improve setup-card spacing and text contrast in both themes, and wrap long endpoint URLs — thanks @yugui923.
