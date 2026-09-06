@@ -1,1 +1,0 @@
-- **feat(models):** Account live listings become the chat catalog source for Claude, Codex, Copilot, and AGY; public metadata only fills prices on IDs those accounts already list.
