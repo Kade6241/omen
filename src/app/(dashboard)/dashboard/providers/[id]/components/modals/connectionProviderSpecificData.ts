@@ -25,6 +25,7 @@ type FormData = QuotaScrapingFieldValues &
     consoleApiKey: string;
     customUserAgent: string;
     cx: string;
+    darioUsageBaseUrl?: string;
     excludedModels: string;
     importFreeModelsOnly: boolean;
     m365Tier?: M365TierValue;
@@ -46,6 +47,16 @@ type ProviderSpecificData = Record<string, unknown>;
 // reuses the same generic field for its New-API System Access Token, paired with
 // newApiUserId (the New-Api-User header value). See agentrouterQuotaFetcher.ts.
 const CONSOLE_API_KEY_PROVIDERS = new Set(["bailian-coding-plan", "agentrouter"]);
+
+export function assignDarioUsageProviderData(
+  target: ProviderSpecificData,
+  enabled: boolean,
+  usageBaseUrl: string
+): void {
+  if (!enabled) return;
+  target.usageAdapter = "dario";
+  target.usageBaseUrl = usageBaseUrl.trim();
+}
 
 export function buildAddProviderSpecificData(options: {
   provider?: string;

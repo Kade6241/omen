@@ -37,6 +37,7 @@ import {
   resolveProviderOAuthBackendId,
 } from "../providerPageUtils";
 import { findDefaultReferral } from "@/lib/radar/referrals";
+import { isDarioUsageConnection } from "@omniroute/open-sse/services/usage/adapter";
 import { type ConnectionRowConnection } from "./components/ConnectionRow";
 import { useProviderConnections } from "./hooks/useProviderConnections";
 import { useProviderSettings } from "./hooks/useProviderSettings";
@@ -835,6 +836,11 @@ export default function ProviderDetailPageClient() {
         isCompatible={isCompatible}
         isAnthropicProtocolCompatible={isAnthropicProtocolCompatible}
         isCcCompatible={isCcCompatible}
+        isDarioProviderNode={connections.some((connection) => isDarioUsageConnection(connection))}
+        darioUsageBaseUrl={
+          connections.find((connection) => isDarioUsageConnection(connection))?.providerSpecificData
+            ?.usageBaseUrl as string | undefined
+        }
         isCommandCode={isCommandCode}
         isUpstreamProxyProvider={isUpstreamProxyProvider}
         subscriptionRisk={subscriptionRisk}

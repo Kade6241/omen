@@ -52,6 +52,8 @@ interface ProviderModalsPanelProps {
   isCompatible: boolean;
   isAnthropicProtocolCompatible: boolean;
   isCcCompatible: boolean;
+  isDarioProviderNode: boolean;
+  darioUsageBaseUrl?: string;
   isCommandCode: boolean;
   isUpstreamProxyProvider: boolean;
   subscriptionRisk: boolean;
@@ -155,6 +157,8 @@ export default function ProviderModalsPanel({
   isCompatible,
   isAnthropicProtocolCompatible,
   isCcCompatible,
+  isDarioProviderNode,
+  darioUsageBaseUrl,
   isUpstreamProxyProvider,
   subscriptionRisk,
   existingConnectionCount,
@@ -323,6 +327,8 @@ export default function ProviderModalsPanel({
           isCompatible={isCompatible}
           isAnthropic={isAnthropicProtocolCompatible}
           isCcCompatible={isCcCompatible}
+          isDario={isDarioProviderNode}
+          darioUsageBaseUrl={darioUsageBaseUrl}
           isCommandCode={isCommandCode}
           commandCodeAuthState={commandCodeAuthState}
           onStartCommandCodeAuth={handleStartCommandCodeAuth}

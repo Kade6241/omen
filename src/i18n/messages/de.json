@@ -6430,7 +6430,14 @@
     "harImportErrorUnparsableUrl": "Found the chat connection, but couldn't read its URL.",
     "harImportErrorMissingFields": "Found the chat connection, but the token was missing from it.",
     "harImportErrorReadFailed": "Couldn't read that file.",
-    "harImportErrorUnknown": "Couldn't extract a credential from that HAR file."
+    "harImportErrorUnknown": "Couldn't extract a credential from that HAR file.",
+    "addDario": "Add Dario",
+    "dario": "Dario",
+    "darioDescription": "Anthropic-compatible gateway with connection-scoped quota reporting.",
+    "darioInferenceBaseUrlLabel": "Inference Base URL",
+    "darioUsageBaseUrlLabel": "Usage Base URL",
+    "darioUsageBaseUrlHint": "OmniRoute requests /accounts here.",
+    "darioCreateFailed": "Failed to create Dario provider"
   },
   "settings": {
     "title": "Einstellungen",

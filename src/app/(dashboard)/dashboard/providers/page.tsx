@@ -51,12 +51,13 @@ const AddCompatibleProviderModal = dynamic(
   () => import("./components/AddCompatibleProviderModal"),
   { ssr: false }
 );
+const AddDarioProviderModal = dynamic(() => import("./components/AddDarioProviderModal"), {
+  ssr: false,
+});
 import { CategoryDot } from "./components/CategoryDot";
 const ImportProvidersFromFileModal = dynamic(
   () =>
-    import("./components/ImportProvidersFromFileModal").then(
-      (m) => m.ImportProvidersFromFileModal
-    ),
+    import("./components/ImportProvidersFromFileModal").then((m) => m.ImportProvidersFromFileModal),
   { ssr: false }
 );
 import NoAuthProvidersSection from "./components/NoAuthProvidersSection";
@@ -204,6 +205,7 @@ export default function ProvidersPage() {
   const [loading, setLoading] = useState(true);
   const [showAllProviders, setShowAllProviders] = useState(false);
   const [showAddCompatibleModal, setShowAddCompatibleModal] = useState(false);
+  const [showAddDarioModal, setShowAddDarioModal] = useState(false);
   const [showAddAnthropicCompatibleModal, setShowAddAnthropicCompatibleModal] = useState(false);
   const [showAddCcCompatibleModal, setShowAddCcCompatibleModal] = useState(false);
   const [showImportFromFileModal, setShowImportFromFileModal] = useState(false);
@@ -1023,6 +1025,9 @@ export default function ProvidersPage() {
                         {addCcCompatibleLabel}
                       </Button>
                     )}
+                    <Button size="sm" icon="add" onClick={() => setShowAddDarioModal(true)}>
+                      {providerText(t, "addDario", "Add Dario")}
+                    </Button>
                     <Button
                       size="sm"
                       icon="add"
@@ -1816,6 +1821,15 @@ export default function ProvidersPage() {
           onCreated={(node) => {
             setProviderNodes((prev) => upsertProviderNodeById(prev, node));
             setShowAddCompatibleModal(false);
+            router.push(`/dashboard/providers/${node.id}`);
+          }}
+        />
+        <AddDarioProviderModal
+          isOpen={showAddDarioModal}
+          onClose={() => setShowAddDarioModal(false)}
+          onCreated={(node) => {
+            setProviderNodes((prev) => upsertProviderNodeById(prev, node));
+            setShowAddDarioModal(false);
             router.push(`/dashboard/providers/${node.id}`);
           }}
         />

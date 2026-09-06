@@ -25,7 +25,7 @@ export type OnboardingTestResult = {
   [key: string]: unknown;
 };
 
-export type CompatibleNodeMode = "openai" | "anthropic" | "cc";
+export type CompatibleNodeMode = "openai" | "anthropic" | "cc" | "dario";
 
 export type CompatibleProviderNode = {
   id: string;
@@ -48,6 +48,16 @@ export type CreateCompatibleProviderNodeInput = {
   modelsPath?: string;
 };
 
+export type CreateDarioProviderInput = {
+  name: string;
+  prefix: string;
+  baseUrl: string;
+  usageBaseUrl?: string;
+  apiKey: string;
+  chatPath?: string;
+  modelsPath?: string;
+};
+
 export type ValidateOnboardingApiKeyInput = z.input<typeof validateProviderApiKeySchema>;
 
 export type CreateOnboardingConnectionInput = {
@@ -59,7 +69,7 @@ export type CreateOnboardingConnectionInput = {
 };
 
 const compatibleProviderNodeInputSchema = z.object({
-  mode: z.enum(["openai", "anthropic", "cc"]),
+  mode: z.enum(["openai", "anthropic", "cc", "dario"]),
   name: z.string().trim().min(1, "Name is required"),
   prefix: z.string().trim().min(1, "Prefix is required"),
   baseUrl: z.string().trim().min(1, "Base URL is required"),
@@ -237,6 +247,12 @@ export function buildCompatibleNodeRequest(input: CreateCompatibleProviderNodeIn
       hasModelsPath: true,
       chatPath: "",
     },
+    dario: {
+      type: "anthropic-compatible",
+      hasApiType: false,
+      hasModelsPath: true,
+      chatPath: "",
+    },
     cc: {
       type: "anthropic-compatible",
       compatMode: "cc",
@@ -275,4 +291,61 @@ export async function createCompatibleProviderNode(
     throw new Error("Compatible provider was created without an id");
   }
   return data.node;
+}
+
+export function buildDarioProviderSpecificData(input: {
+  baseUrl: string;
+  usageBaseUrl?: string;
+}): Record<string, unknown> {
+  const baseUrl = new URL(input.baseUrl.trim());
+  const explicitUsageUrl = input.usageBaseUrl?.trim();
+  let usageBaseUrl: URL;
+  if (explicitUsageUrl) {
+    usageBaseUrl = new URL(explicitUsageUrl);
+  } else {
+    const parts = baseUrl.pathname.split("/").filter(Boolean);
+    if (parts.pop() !== "v1") {
+      throw new Error("Dario usage URL is required when the inference URL does not end in /v1");
+    }
+    baseUrl.pathname = `/${parts.join("/")}`;
+    usageBaseUrl = baseUrl;
+  }
+  if (
+    !["http:", "https:"].includes(usageBaseUrl.protocol) ||
+    usageBaseUrl.username ||
+    usageBaseUrl.password ||
+    usageBaseUrl.search ||
+    usageBaseUrl.hash
+  ) {
+    throw new Error("Dario usage URL must be an unambiguous http(s) URL");
+  }
+  return {
+    usageAdapter: "dario",
+    usageBaseUrl: usageBaseUrl.toString().replace(/\/$/, ""),
+  };
+}
+
+export async function createDarioProvider(
+  input: CreateDarioProviderInput
+): Promise<{ node: CompatibleProviderNode; connection: OnboardingConnection }> {
+  const node = await createCompatibleProviderNode({ ...input, mode: "dario" });
+  try {
+    const connection = await createOnboardingConnection({
+      provider: node.id,
+      name: input.name,
+      apiKey: input.apiKey,
+      providerSpecificData: buildDarioProviderSpecificData(input),
+      testStatus: "unknown",
+    });
+    return { node, connection };
+  } catch (error) {
+    const cleanup = await fetch(`/api/provider-nodes/${encodeURIComponent(node.id)}`, {
+      method: "DELETE",
+    }).catch(() => null);
+    if (!cleanup?.ok) {
+      const message = error instanceof Error ? error.message : "Failed to create Dario connection";
+      throw new Error(`${message}; cleanup failed for provider node ${node.id}`);
+    }
+    throw error;
+  }
 }

@@ -316,6 +316,91 @@ test("provider onboarding API builds compatible provider node request bodies", (
   );
 });
 
+test("provider onboarding builds explicit Dario node and connection metadata", () => {
+  assert.deepEqual(
+    api.buildCompatibleNodeRequest({
+      mode: "dario",
+      name: "Dario Gateway",
+      prefix: "dario-gw",
+      baseUrl: "https://gateway.example/dario/v1",
+    }),
+    {
+      name: "Dario Gateway",
+      prefix: "dario-gw",
+      baseUrl: "https://gateway.example/dario/v1",
+      type: "anthropic-compatible",
+      chatPath: "",
+      modelsPath: "",
+    }
+  );
+
+  assert.deepEqual(
+    api.buildDarioProviderSpecificData({
+      baseUrl: "https://gateway.example/dario/v1",
+      usageBaseUrl: "",
+    }),
+    {
+      usageAdapter: "dario",
+      usageBaseUrl: "https://gateway.example/dario",
+    }
+  );
+  assert.deepEqual(
+    api.buildDarioProviderSpecificData({
+      baseUrl: "https://gateway.example/dario/v1",
+      usageBaseUrl: "https://usage.example/pool",
+    }),
+    {
+      usageAdapter: "dario",
+      usageBaseUrl: "https://usage.example/pool",
+    }
+  );
+});
+
+test("Dario onboarding removes an orphan node when connection creation fails", async () => {
+  const calls = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    calls.push({ url: String(url), init });
+    if (String(url) === "/api/provider-nodes") {
+      return Response.json(
+        { node: { id: "anthropic-compatible-node", name: "Dario Gateway" } },
+        { status: 201 }
+      );
+    }
+    if (String(url) === "/api/providers") {
+      return Response.json({ error: "connection failed" }, { status: 500 });
+    }
+    if (String(url) === "/api/provider-nodes/anthropic-compatible-node") {
+      return Response.json({ success: true });
+    }
+    return Response.json({ error: "unexpected" }, { status: 500 });
+  };
+
+  try {
+    await assert.rejects(
+      () =>
+        api.createDarioProvider({
+          name: "Dario Gateway",
+          prefix: "dario-gw",
+          baseUrl: "https://gateway.example/v1",
+          usageBaseUrl: "https://gateway.example",
+          apiKey: "test-key",
+        }),
+      /connection failed/
+    );
+    assert.deepEqual(
+      calls.map((call) => [call.url, call.init?.method]),
+      [
+        ["/api/provider-nodes", "POST"],
+        ["/api/providers", "POST"],
+        ["/api/provider-nodes/anthropic-compatible-node", "DELETE"],
+      ]
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("provider onboarding validates compatible provider node request bodies", () => {
   assert.throws(
     () =>

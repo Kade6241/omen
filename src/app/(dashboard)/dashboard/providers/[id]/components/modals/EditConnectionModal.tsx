@@ -20,6 +20,7 @@ import useEmailPrivacyStore from "@/store/emailPrivacyStore";
 import { useNotificationStore } from "@/store/notificationStore";
 import { type CodexServiceTier } from "@/lib/providers/requestDefaults";
 import { isClaudeExtraUsageBlockEnabled } from "@/lib/providers/claudeExtraUsage";
+import { isDarioUsageConnection } from "@omniroute/open-sse/services/usage/adapter";
 import { resolveDashboardProviderInfo } from "../../../providerPageUtils";
 import {
   isBaseUrlConfigurableProvider,
@@ -52,7 +53,10 @@ import WebSessionCredentialGuide from "../WebSessionCredentialGuide";
 import HarImportButton from "../HarImportButton";
 import CcCompatibleRequestDefaultsFields from "./CcCompatibleRequestDefaultsFields";
 import { CodexConnectionFields } from "./CodexFingerprintFields";
-import { assignEditApiKeyProviderSpecificData } from "./connectionProviderSpecificData";
+import {
+  assignDarioUsageProviderData,
+  assignEditApiKeyProviderSpecificData,
+} from "./connectionProviderSpecificData";
 import { isM365TierCapableProvider, normalizeM365TierValue, type M365TierValue } from "./m365Tier";
 import ProviderTierField from "./ProviderTierField";
 import AgentrouterConsoleFields from "./AgentrouterConsoleFields";
@@ -99,6 +103,7 @@ export default function EditConnectionModal({
   const provider = connection?.provider || providerId;
   const connectionAuthType = connection?.authType;
   const connectionProviderSpecificData = connection?.providerSpecificData;
+  const isDario = Boolean(connection && isDarioUsageConnection(connection));
   const showFreeModelsToggle = providerHasFreeModels(provider);
   const [formData, setFormData] = useState({
     name: "",
@@ -113,6 +118,7 @@ export default function EditConnectionModal({
     apiKey: "",
     healthCheckInterval: 60,
     baseUrl: "",
+    darioUsageBaseUrl: "",
     targetFormat: "",
     cx: "",
     region: "",
@@ -331,6 +337,7 @@ export default function EditConnectionModal({
         apiKey: "",
         healthCheckInterval: connection.healthCheckInterval ?? 60,
         baseUrl: existingBaseUrl || defaultBaseUrl,
+        darioUsageBaseUrl: stringField(connection.providerSpecificData?.usageBaseUrl),
         targetFormat: existingTargetFormat || "",
         cx: existingCx,
         region:
@@ -640,6 +647,11 @@ export default function EditConnectionModal({
           ...(validationPsd || {}),
           ...(isCodex ? { codexFingerprintMode: null, codex_fingerprint_mode: null } : {}),
         };
+        assignDarioUsageProviderData(
+          updates.providerSpecificData,
+          isDario,
+          formData.darioUsageBaseUrl
+        );
         assignEditApiKeyProviderSpecificData({
           provider,
           formData,
@@ -1311,6 +1323,18 @@ export default function EditConnectionModal({
                 : undefined)
             }
           />
+        )}
+        {isDario && (
+          <div className="flex flex-col gap-2 rounded-lg border border-primary/25 bg-primary/5 p-3">
+            <Badge variant="info">Dario</Badge>
+            <Input
+              label={providerText(t, "darioUsageBaseUrlLabel", "Usage Base URL")}
+              value={formData.darioUsageBaseUrl}
+              onChange={(e) => setFormData({ ...formData, darioUsageBaseUrl: e.target.value })}
+              placeholder="https://gateway.example"
+              hint={providerText(t, "darioUsageBaseUrlHint", "OmniRoute requests /accounts here.")}
+            />
+          </div>
         )}
         {showProtocolSelector && (
           <Select

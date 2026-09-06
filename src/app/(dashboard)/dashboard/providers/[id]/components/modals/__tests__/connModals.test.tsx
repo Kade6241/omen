@@ -489,6 +489,82 @@ describe("conn-modals (Phase 1c extraction)", () => {
     expect(payload.defaultModel).toBeUndefined();
   });
 
+  it("AddApiKeyModal preserves the Dario capability for additional connections", async () => {
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    const modal = renderModal(
+      <AddApiKeyModal
+        isOpen={true}
+        provider="anthropic-compatible-12345678-abcd-4abc-8abc-123456789abc"
+        providerName="Dario"
+        isCompatible={true}
+        isAnthropic={true}
+        isDario={true}
+        darioUsageBaseUrl="https://gateway.example"
+        onSave={onSave}
+        onClose={vi.fn()}
+      />
+    );
+    const saveButton = Array.from(modal.querySelectorAll("button")).find(
+      (button) => button.textContent === "providers.save"
+    );
+    await act(async () => {
+      saveButton?.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(onSave.mock.calls[0][0]).toMatchObject({
+      providerSpecificData: {
+        usageAdapter: "dario",
+        usageBaseUrl: "https://gateway.example",
+      },
+    });
+  });
+
+  it("EditConnectionModal recognizes Dario only from the explicit connection capability", () => {
+    const dario = renderModal(
+      <EditConnectionModal
+        isOpen={true}
+        connection={{
+          id: "conn-dario",
+          name: "Dario",
+          provider: "anthropic-compatible-12345678-abcd-4abc-8abc-123456789abc",
+          authType: "apikey",
+          priority: 1,
+          providerSpecificData: {
+            usageAdapter: "dario",
+            usageBaseUrl: "https://gateway.example",
+          },
+        }}
+        providerId="anthropic-compatible-12345678-abcd-4abc-8abc-123456789abc"
+        onSave={vi.fn().mockResolvedValue(undefined)}
+        onClose={vi.fn()}
+      />
+    );
+    expect(dario.textContent).toContain("Dario");
+    expect(dario.textContent).toContain("Usage Base URL");
+    expect(
+      dario.querySelector<HTMLInputElement>('input[value="https://gateway.example"]')
+    ).not.toBeNull();
+
+    const generic = renderModal(
+      <EditConnectionModal
+        isOpen={true}
+        connection={{
+          id: "conn-generic",
+          name: "Dario by name only",
+          provider: "anthropic-compatible-12345678-abcd-4abc-8abc-123456789abc",
+          authType: "apikey",
+          priority: 1,
+          providerSpecificData: { baseUrl: "https://dario.example/v1" },
+        }}
+        providerId="anthropic-compatible-12345678-abcd-4abc-8abc-123456789abc"
+        onSave={vi.fn().mockResolvedValue(undefined)}
+        onClose={vi.fn()}
+      />
+    );
+    expect(generic.textContent).not.toContain("Usage Base URL");
+  });
+
   it("EditConnectionModal renders and prefills the Default Model for a compatible connection", () => {
     const onSave = vi.fn().mockResolvedValue(undefined);
     const connection = {

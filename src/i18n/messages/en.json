@@ -6430,7 +6430,14 @@
     "savedModelEndpointSettings": "Saved model endpoint settings",
     "searchByModelAria": "Search by model",
     "selectSupportedEndpoint": "Select at least one supported endpoint",
-    "antigravityClientProfileHarness": "Harness / CLI"
+    "antigravityClientProfileHarness": "Harness / CLI",
+    "addDario": "Add Dario",
+    "dario": "Dario",
+    "darioDescription": "Anthropic-compatible gateway with connection-scoped quota reporting.",
+    "darioInferenceBaseUrlLabel": "Inference Base URL",
+    "darioUsageBaseUrlLabel": "Usage Base URL",
+    "darioUsageBaseUrlHint": "OmniRoute requests /accounts here.",
+    "darioCreateFailed": "Failed to create Dario provider"
   },
   "settings": {
     "title": "Settings",

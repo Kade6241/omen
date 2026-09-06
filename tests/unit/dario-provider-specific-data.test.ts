@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { validateProviderSpecificData } from "../../src/shared/validation/providerSpecificData.ts";
+import { assignDarioUsageProviderData } from "../../src/app/(dashboard)/dashboard/providers/[id]/components/modals/connectionProviderSpecificData.ts";
 
 function issuesFor(data: Record<string, unknown>) {
   const issues: Array<{ path?: PropertyKey[]; message: string }> = [];
@@ -18,6 +19,20 @@ test("provider metadata accepts the allowlisted Dario usage capability", () => {
     issuesFor({ usageAdapter: "dario", usageBaseUrl: "https://example.com/prefix" }),
     []
   );
+});
+
+test("connection metadata builder preserves explicit Dario capability only when enabled", () => {
+  const dario: Record<string, unknown> = { baseUrl: "https://gateway.example/v1" };
+  assignDarioUsageProviderData(dario, true, " https://gateway.example/dario ");
+  assert.deepEqual(dario, {
+    baseUrl: "https://gateway.example/v1",
+    usageAdapter: "dario",
+    usageBaseUrl: "https://gateway.example/dario",
+  });
+
+  const generic: Record<string, unknown> = { baseUrl: "https://gateway.example/v1" };
+  assignDarioUsageProviderData(generic, false, "https://gateway.example");
+  assert.deepEqual(generic, { baseUrl: "https://gateway.example/v1" });
 });
 
 test("provider metadata rejects arbitrary usage adapters", () => {

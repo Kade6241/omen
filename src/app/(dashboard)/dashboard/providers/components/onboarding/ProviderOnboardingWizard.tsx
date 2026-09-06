@@ -26,6 +26,7 @@ import {
 import { buildProviderDetailsHref } from "./providerOnboardingHref";
 import {
   createCompatibleProviderNode,
+  createDarioProvider,
   createOnboardingConnection,
   fetchOnboardingConnections,
   fetchOnboardingProviderNodes,
@@ -54,6 +55,7 @@ type CustomFormState = {
   prefix: string;
   baseUrl: string;
   apiKey: string;
+  usageBaseUrl: string;
   chatPath: string;
   modelsPath: string;
 };
@@ -73,6 +75,7 @@ const DEFAULT_CUSTOM_FORM: CustomFormState = {
   prefix: "",
   baseUrl: "https://api.openai.com/v1",
   apiKey: "",
+  usageBaseUrl: "",
   chatPath: "",
   modelsPath: "",
 };
@@ -453,18 +456,34 @@ export default function ProviderOnboardingWizard() {
     setTestResult(null);
     try {
       setStatus(text("onboardingCreatingCompatibleProvider", "Creating compatible provider…"));
-      const node = await createCompatibleProviderNode(customForm);
-      setStatus(
-        text("onboardingSavingCompatibleConnection", "Saving compatible provider connection…")
-      );
-      const providerName =
-        node.name || text("onboardingCustomProviderFallbackName", "Custom provider");
-      const connection = await createOnboardingConnection({
-        provider: node.id,
-        name: customForm.name.trim() || defaultConnectionName(providerName),
-        apiKey: customForm.apiKey.trim() || undefined,
-        testStatus: "unknown",
-      });
+      let node;
+      let connection;
+      if (customForm.mode === "dario") {
+        const created = await createDarioProvider({
+          name: customForm.name.trim(),
+          prefix: customForm.prefix.trim(),
+          baseUrl: customForm.baseUrl.trim(),
+          usageBaseUrl: customForm.usageBaseUrl.trim(),
+          apiKey: customForm.apiKey.trim(),
+          chatPath: customForm.chatPath,
+          modelsPath: customForm.modelsPath,
+        });
+        node = created.node;
+        connection = created.connection;
+      } else {
+        node = await createCompatibleProviderNode(customForm);
+        setStatus(
+          text("onboardingSavingCompatibleConnection", "Saving compatible provider connection…")
+        );
+        const providerName =
+          node.name || text("onboardingCustomProviderFallbackName", "Custom provider");
+        connection = await createOnboardingConnection({
+          provider: node.id,
+          name: customForm.name.trim() || defaultConnectionName(providerName),
+          apiKey: customForm.apiKey.trim() || undefined,
+          testStatus: "unknown",
+        });
+      }
       setCreatedConnection(connection);
       await runConnectionTest(connection);
       setStep("result");
@@ -529,7 +548,10 @@ export default function ProviderOnboardingWizard() {
   };
 
   const customReady = Boolean(
-    customForm.name.trim() && customForm.prefix.trim() && customForm.baseUrl.trim()
+    customForm.name.trim() &&
+    customForm.prefix.trim() &&
+    customForm.baseUrl.trim() &&
+    (customForm.mode !== "dario" || customForm.apiKey.trim())
   );
   const apiKeyReady = Boolean(
     selectedProvider &&
@@ -802,6 +824,7 @@ export default function ProviderOnboardingWizard() {
                           : event.target.value === "anthropic"
                             ? "https://api.anthropic.com/v1"
                             : "",
+                      usageBaseUrl: "",
                       chatPath: event.target.value === "cc" ? "/v1/messages?beta=true" : "",
                     })
                   }
@@ -812,6 +835,7 @@ export default function ProviderOnboardingWizard() {
                   <option value="anthropic">
                     {text("onboardingAnthropicCompatible", "Anthropic-compatible")}
                   </option>
+                  <option value="dario">{text("dario", "Dario")}</option>
                   {ccCompatibleProviderEnabled && (
                     <option value="cc">
                       {text("onboardingClaudeCodeCompatible", "Claude Code-compatible")}
@@ -848,6 +872,17 @@ export default function ProviderOnboardingWizard() {
                 onChange={(event) => setCustomForm({ ...customForm, apiKey: event.target.value })}
                 placeholder="sk-…"
               />
+              {customForm.mode === "dario" && (
+                <Input
+                  label={text("darioUsageBaseUrlLabel", "Usage Base URL")}
+                  value={customForm.usageBaseUrl}
+                  onChange={(event) =>
+                    setCustomForm({ ...customForm, usageBaseUrl: event.target.value })
+                  }
+                  placeholder="https://gateway.example"
+                  hint={text("darioUsageBaseUrlHint", "OmniRoute requests /accounts here.")}
+                />
+              )}
               <Input
                 label={text("onboardingChatPath", "Chat path")}
                 value={customForm.chatPath}

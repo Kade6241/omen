@@ -33,7 +33,10 @@ import { useOpenRouterPresetControl } from "../OpenRouterPresetInput";
 import WebSessionCredentialGuide from "../WebSessionCredentialGuide";
 import HarImportButton from "../HarImportButton";
 import CcCompatibleRequestDefaultsFields from "./CcCompatibleRequestDefaultsFields";
-import { buildAddProviderSpecificData } from "./connectionProviderSpecificData";
+import {
+  assignDarioUsageProviderData,
+  buildAddProviderSpecificData,
+} from "./connectionProviderSpecificData";
 import { getCommandCodeAuthPhaseLabel } from "./commandCodeAuthPhase";
 import { computeConnectionDefaultName } from "./computeConnectionDefaultName";
 import AgentrouterConsoleFields from "./AgentrouterConsoleFields";
@@ -50,6 +53,8 @@ export interface AddApiKeyModalProps {
   isCompatible?: boolean;
   isAnthropic?: boolean;
   isCcCompatible?: boolean;
+  isDario?: boolean;
+  darioUsageBaseUrl?: string;
   isCommandCode?: boolean;
   commandCodeAuthState?: CommandCodeAuthFlowState;
   onStartCommandCodeAuth?: () => void;
@@ -74,6 +79,8 @@ export default function AddApiKeyModal({
   isCompatible,
   isAnthropic,
   isCcCompatible,
+  isDario = false,
+  darioUsageBaseUrl = "",
   isCommandCode,
   commandCodeAuthState,
   onStartCommandCodeAuth,
@@ -400,6 +407,7 @@ export default function AddApiKeyModal({
         ...(providerSpecificData || {}),
         ...(validatedProviderSpecificData || {}),
       };
+      assignDarioUsageProviderData(mergedProviderSpecificData, isDario, darioUsageBaseUrl);
 
       const encodedCredential = isChatGptWebCodex
         ? JSON.stringify({
@@ -779,48 +787,49 @@ export default function AddApiKeyModal({
                 onImport={(apiKey) => setFormData({ ...formData, apiKey })}
               />
             )}
-            {!isNoAuthWebSessionCredential && (() => {
-              const isCheckDisabled =
-                (!isCompatible && !apiKeyOptional && !formData.apiKey) ||
-                (isGooglePse && !formData.cx.trim()) ||
-                validating ||
-                saving;
-              return (
-                <div className="flex gap-2">
-                  <Input
-                    label={apiCredentialLabel}
-                    type="password"
-                    value={formData.apiKey}
-                    onChange={(e) => setFormData({ ...formData, apiKey: e.target.value })}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" && !isCheckDisabled) {
-                        e.preventDefault();
-                        handleValidate();
-                      }
-                    }}
-                    className="flex-1"
-                    placeholder={apiCredentialPlaceholder}
-                    hint={apiCredentialHint}
-                    autoComplete="off"
-                    spellCheck={false}
-                    autoCapitalize="off"
-                  />
-                  <div className="pt-6">
-                    <Button
-                      onClick={handleValidate}
-                      disabled={isCheckDisabled}
-                      variant="secondary"
-                    >
-                      {validating
-                        ? t("checking")
-                        : webSessionCredential
-                          ? getWebSessionCredentialCheckLabel(t, webSessionCredential)
-                          : t("check")}
-                    </Button>
+            {!isNoAuthWebSessionCredential &&
+              (() => {
+                const isCheckDisabled =
+                  (!isCompatible && !apiKeyOptional && !formData.apiKey) ||
+                  (isGooglePse && !formData.cx.trim()) ||
+                  validating ||
+                  saving;
+                return (
+                  <div className="flex gap-2">
+                    <Input
+                      label={apiCredentialLabel}
+                      type="password"
+                      value={formData.apiKey}
+                      onChange={(e) => setFormData({ ...formData, apiKey: e.target.value })}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && !isCheckDisabled) {
+                          e.preventDefault();
+                          handleValidate();
+                        }
+                      }}
+                      className="flex-1"
+                      placeholder={apiCredentialPlaceholder}
+                      hint={apiCredentialHint}
+                      autoComplete="off"
+                      spellCheck={false}
+                      autoCapitalize="off"
+                    />
+                    <div className="pt-6">
+                      <Button
+                        onClick={handleValidate}
+                        disabled={isCheckDisabled}
+                        variant="secondary"
+                      >
+                        {validating
+                          ? t("checking")
+                          : webSessionCredential
+                            ? getWebSessionCredentialCheckLabel(t, webSessionCredential)
+                            : t("check")}
+                      </Button>
+                    </div>
                   </div>
-                </div>
-              );
-            })()}
+                );
+              })()}
             {isChatGptWebCodex && (
               <div className="space-y-3 rounded-lg border border-border bg-surface/40 p-3">
                 <div>
