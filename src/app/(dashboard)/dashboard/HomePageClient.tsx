@@ -102,9 +102,10 @@ function mergeUpdateStep(steps: UpdateStep[], nextStep: UpdateStep) {
 
 // Quick-start link classes, extracted so each <Link> still fits on one line with
 // prefetch={false} (#8281) — this file is size-frozen.
-const INLINE_LINK = "text-primary hover:underline";
+const INLINE_LINK =
+  "font-medium text-rose-700 dark:text-rose-300 underline underline-offset-4 decoration-current/50 hover:decoration-current rounded-sm focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-current";
 const DOCS_LINK =
-  "hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-border text-text-muted hover:text-text-main hover:bg-bg-subtle transition-colors";
+  "inline-flex min-h-11 w-full sm:w-auto shrink-0 items-center justify-center gap-2 px-4 py-2 rounded-control text-sm font-medium border border-border text-text-main hover:bg-bg-subtle transition-colors focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-current";
 
 // Stable no-op subscription for useSyncExternalStore reads of never-changing
 // browser globals (location.origin does not change without a full navigation).
@@ -1047,27 +1048,34 @@ export default function HomePageClient({ machineId }: HomePageClientProps) {
 
       {/* Quick Start (controlled by Appearance setting, default on) */}
       {showQuickStartOnHome && (
-        <Card>
-          <div className="flex flex-col gap-5">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-lg font-semibold">{t("quickStart")}</h2>
-                <p className="text-sm text-text-muted">{t("quickStartDesc")}</p>
+        <Card className="p-4 sm:p-6">
+          <div className="flex min-w-0 flex-col gap-6">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+              <div className="min-w-0">
+                <h2 className="text-xl font-semibold tracking-tight">{t("quickStart")}</h2>
+                <p className="mt-1 max-w-xl text-sm leading-6 text-text-main/80">
+                  {t("quickStartDesc")}
+                </p>
               </div>
               <Link href="/docs" prefetch={false} className={DOCS_LINK}>
-                <span className="material-symbols-outlined text-[14px]">menu_book</span>
+                <span aria-hidden="true" className="material-symbols-outlined text-[18px]">
+                  menu_book
+                </span>
                 {t("fullDocs")}
               </Link>
             </div>
 
-            <ol className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
-              <li className="rounded-lg border border-border bg-bg-subtle p-4 flex gap-3">
-                <div className="flex items-center justify-center size-8 rounded-lg bg-primary/10 text-primary shrink-0">
+            <ol className="grid grid-cols-1 xl:grid-cols-2 gap-4 text-sm leading-6">
+              <li className="min-w-0 rounded-lg border border-border bg-bg-subtle/50 p-4 sm:p-5 flex gap-3 sm:gap-4">
+                <div
+                  aria-hidden="true"
+                  className="flex items-center justify-center size-10 rounded-lg bg-rose-500/10 text-rose-700 dark:text-rose-300 shrink-0"
+                >
                   <span className="material-symbols-outlined text-[18px]">key</span>
                 </div>
-                <div>
-                  <span className="font-semibold">{t("step1Title")}</span>
-                  <p className="text-text-muted mt-0.5">
+                <div className="min-w-0 [overflow-wrap:anywhere]">
+                  <h3 className="font-semibold text-text-main">{t("step1Title")}</h3>
+                  <p className="text-text-main/80 mt-1">
                     {t.rich("step1Desc", {
                       endpoint: (chunks) => (
                         <Link
@@ -1082,13 +1090,16 @@ export default function HomePageClient({ machineId }: HomePageClientProps) {
                   </p>
                 </div>
               </li>
-              <li className="rounded-lg border border-border bg-bg-subtle p-4 flex gap-3">
-                <div className="flex items-center justify-center size-8 rounded-lg bg-green-500/10 text-green-500 shrink-0">
+              <li className="min-w-0 rounded-lg border border-border bg-bg-subtle/50 p-4 sm:p-5 flex gap-3 sm:gap-4">
+                <div
+                  aria-hidden="true"
+                  className="flex items-center justify-center size-10 rounded-lg bg-rose-500/10 text-rose-700 dark:text-rose-300 shrink-0"
+                >
                   <span className="material-symbols-outlined text-[18px]">dns</span>
                 </div>
-                <div>
-                  <span className="font-semibold">{t("step2Title")}</span>
-                  <p className="text-text-muted mt-0.5">
+                <div className="min-w-0 [overflow-wrap:anywhere]">
+                  <h3 className="font-semibold text-text-main">{t("step2Title")}</h3>
+                  <p className="text-text-main/80 mt-1">
                     {t.rich("step2Desc", {
                       providers: (chunks) => (
                         <Link href="/dashboard/providers" prefetch={false} className={INLINE_LINK}>
@@ -1099,24 +1110,30 @@ export default function HomePageClient({ machineId }: HomePageClientProps) {
                   </p>
                 </div>
               </li>
-              <li className="rounded-lg border border-border bg-bg-subtle p-4 flex gap-3">
-                <div className="flex items-center justify-center size-8 rounded-lg bg-blue-500/10 text-blue-500 shrink-0">
+              <li className="min-w-0 rounded-lg border border-border bg-bg-subtle/50 p-4 sm:p-5 flex gap-3 sm:gap-4">
+                <div
+                  aria-hidden="true"
+                  className="flex items-center justify-center size-10 rounded-lg bg-rose-500/10 text-rose-700 dark:text-rose-300 shrink-0"
+                >
                   <span className="material-symbols-outlined text-[18px]">link</span>
                 </div>
-                <div>
-                  <span className="font-semibold">{t("step3Title")}</span>
-                  <p className="text-text-muted mt-0.5">
+                <div className="min-w-0 [overflow-wrap:anywhere]">
+                  <h3 className="font-semibold text-text-main">{t("step3Title")}</h3>
+                  <p className="text-text-main/80 mt-1">
                     {t("step3Desc", { url: currentEndpoint })}
                   </p>
                 </div>
               </li>
-              <li className="rounded-lg border border-border bg-bg-subtle p-4 flex gap-3">
-                <div className="flex items-center justify-center size-8 rounded-lg bg-amber-500/10 text-amber-500 shrink-0">
+              <li className="min-w-0 rounded-lg border border-border bg-bg-subtle/50 p-4 sm:p-5 flex gap-3 sm:gap-4">
+                <div
+                  aria-hidden="true"
+                  className="flex items-center justify-center size-10 rounded-lg bg-rose-500/10 text-rose-700 dark:text-rose-300 shrink-0"
+                >
                   <span className="material-symbols-outlined text-[18px]">analytics</span>
                 </div>
-                <div>
-                  <span className="font-semibold">{t("step4Title")}</span>
-                  <p className="text-text-muted mt-0.5">
+                <div className="min-w-0 [overflow-wrap:anywhere]">
+                  <h3 className="font-semibold text-text-main">{t("step4Title")}</h3>
+                  <p className="text-text-main/80 mt-1">
                     {t.rich("step4Desc", {
                       logs: (chunks) => (
                         <Link href="/dashboard/logs" prefetch={false} className={INLINE_LINK}>
