@@ -78,7 +78,7 @@ import {
   isNoMemoryRequested,
   resolveCompressionHeader,
 } from "./chatCore/headers.ts";
-import { markCodexScopeRateLimited } from "./chatCore/codexFailover.ts";
+
 import {
   getCodexClientSessionId,
   isCodexOriginatedHeaders,
@@ -105,6 +105,7 @@ import {
   isClaudeCodeSemanticPassthroughRequest,
 } from "./chatCore/passthroughHelpers.ts";
 import { recoverAnthropicThinkingSignature } from "./chatCore/thinkingSignatureRecovery.ts";
+import { runProviderExecutionPipeline } from "./chatCore/providerExecutionPipeline.ts";
 import {
   buildStreamingResponseHeaders,
   materializeDeduplicatedExecutionResult,
@@ -335,9 +336,9 @@ import {
   resolveConnectionTimeoutMs,
 } from "./chatCore/upstreamTimeouts.ts";
 import { getModelNormalizeToolCallId, getModelPreserveOpenAIDeveloperRole } from "@/lib/db/models";
-import { getProviderCredentials, extractSessionAffinityKey } from "@/sse/services/auth";
+import { getProviderCredentials } from "@/sse/services/auth";
 import { assertExclusiveConnectionLeaseFence } from "@/lib/db/exclusiveConnectionLeases";
-import { deleteSessionAccountAffinity } from "@/lib/db/sessionAccountAffinity";
+
 import { getCacheControlSettings } from "@/lib/cacheControlSettings";
 import { guardrailRegistry } from "@/lib/guardrails";
 import type { VideoBridgeLogRedactionEntry } from "@/lib/guardrails/videoBridge";
@@ -3078,27 +3079,7 @@ export async function handleChatCore({
           const isModelScopeForRequest = isModelScope();
           const maxAttempts = isModelScopeForRequest ? 3 : provider === "codex" ? 3 : 1;
 
-          // ── Codex 429 account-rotation state ─────────────────────────────────
-          // Track excluded connection IDs for codex failover across attempts.
-          const codexExcludedIds: string[] = [];
-          // Derive session affinity key once for codex failover (used to clear affinity on 429).
-          const codexSessionAffinityKey =
-            provider === "codex"
-              ? (extractSessionAffinityKey(body, clientRawRequest?.headers) ?? null)
-              : null;
-
-          // ── Antigravity BYOP 422 account-rotation state ─────────────────────
-          // A GCP_PROJECT_REQUIRED 422 is account-specific (that Google
-          // account lacks a GCP Project ID). Rotate to a sibling antigravity
-          // account instead of surfacing the error, so multi-account setups
-          // keep working without user action. Tracked separately from
-          // maxAttempts so non-BYOP antigravity failures never get a second
-          // shot (no double upstream calls).
-          const antigravityByopExcludedIds: string[] = [];
-          let antigravityByopRotationPending = false;
-
-          while (attempts < maxAttempts || antigravityByopRotationPending) {
-            antigravityByopRotationPending = false; // consumed per iteration
+          while (attempts < maxAttempts) {
             trace("pre_executor", { attempt: attempts });
             updatePendingScope(pendingScope, {
               stage: "sending_to_provider",
@@ -3280,156 +3261,6 @@ export async function handleChatCore({
                   await new Promise((r) => setTimeout(r, delay));
                   attempts++;
                   continue;
-                }
-              }
-
-              // Codex 429 account-rotation failover (disabled for context-relay so combo.ts can inject handoff)
-              if (
-                provider === "codex" &&
-                !managedLease &&
-                comboStrategy !== "context-relay" &&
-                res.response.status === 429 &&
-                attempts < maxAttempts - 1 &&
-                // Probe-origin (test-all) 429 must not rotate accounts or persist
-                // cooldowns — routing state untouched (#9817).
-                !(await shouldIsolateProbeFailures())
-              ) {
-                const failedConnectionId =
-                  executionConnectionId || credentials?.connectionId || connectionId;
-                const normalizedHeaders = normalizeHeaders(res.response.headers);
-                const retryAfterHeader = normalizedHeaders["retry-after"] ?? null;
-                const retryAfterMs = retryAfterHeader
-                  ? Number.parseFloat(retryAfterHeader) * 1000
-                  : null;
-
-                log?.warn?.(
-                  "CODEX_FAILOVER",
-                  `429 on connection ${String(failedConnectionId).slice(0, 8)} (attempt ${attempts + 1}/${maxAttempts}), rotating account`
-                );
-
-                // Mark only the current Codex model scope as rate-limited. A connection-wide
-                // cooldown here would let a Spark limit suppress independent Sol/Terra traffic.
-                if (failedConnectionId) {
-                  await markCodexScopeRateLimited({
-                    failedConnectionId: String(failedConnectionId),
-                    model: modelToCall || model || requestedModel || null,
-                    rateLimitedUntil: new Date(Date.now() + (retryAfterMs || 60_000)).toISOString(),
-                    credentials: execCreds || credentials,
-                  });
-                  if (!codexExcludedIds.includes(String(failedConnectionId))) {
-                    codexExcludedIds.push(String(failedConnectionId));
-                  }
-                }
-
-                // Clear session affinity so next request won't be pinned to the failing account
-                if (codexSessionAffinityKey) {
-                  try {
-                    deleteSessionAccountAffinity(codexSessionAffinityKey, "codex");
-                  } catch {
-                    // best-effort
-                  }
-                }
-
-                // Fetch next available codex connection (excluding all previously failed ones)
-                const nextCreds = await getProviderCredentials(
-                  "codex",
-                  null,
-                  null,
-                  modelToCall || model || requestedModel || null,
-                  {
-                    excludeConnectionIds: [...codexExcludedIds],
-                  }
-                ).catch(() => null);
-
-                if (!nextCreds || nextCreds.allRateLimited) {
-                  log?.warn?.("CODEX_FAILOVER", "No more codex accounts available — returning 429");
-                  if (stream) {
-                    releaseAccountSemaphore();
-                    return {
-                      ...res,
-                      _executionCredentials: execCreds,
-                    };
-                  }
-                  return {
-                    ...res,
-                    _accountSemaphoreRelease: releaseAccountSemaphore,
-                    _executionCredentials: execCreds,
-                  };
-                }
-
-                const newConnectionId = nextCreds.connectionId;
-                log?.info?.(
-                  "CODEX_FAILOVER",
-                  `Rotating codex account: ${String(failedConnectionId).slice(0, 8)} → ${newConnectionId.slice(0, 8)} (attempt ${attempts + 2}/${maxAttempts})`
-                );
-
-                logAuditEvent({
-                  action: "codex.account_rotation",
-                  actor: apiKeyInfo?.name || "system",
-                  target: newConnectionId,
-                  details: {
-                    failed_connection_id: failedConnectionId,
-                    new_connection_id: newConnectionId,
-                    attempt: attempts + 1,
-                    retry_after_ms: retryAfterMs,
-                  },
-                });
-
-                // Update credentials in-place so getExecutionCredentials() picks up the new account
-                Object.assign(credentials, nextCreds);
-
-                releaseAccountSemaphore();
-                attempts++;
-                continue;
-              }
-
-              // ── Antigravity BYOP 422 account rotation ───────────────────────
-              // GCP_PROJECT_REQUIRED (422, code gcp_project_required) means
-              // THIS Google account must Bring Its Own GCP Project. Mark the
-              // connection excluded (rateLimitedUntil, best-effort) and rotate
-              // to a sibling antigravity account so the request succeeds
-              // without user action. When no sibling exists (or all are BYOP),
-              // fall through: the error-state block excludes the connection
-              // and the actionable 422 is surfaced.
-              if (provider === "antigravity" && res.response.status === 422) {
-                const byopBody = await res.response
-                  .clone()
-                  .text()
-                  .catch(() => "");
-                if (byopBody.includes("gcp_project_required")) {
-                  const byopFailedId =
-                    executionConnectionId || credentials?.connectionId || connectionId;
-                  if (byopFailedId) {
-                    if (!antigravityByopExcludedIds.includes(String(byopFailedId))) {
-                      antigravityByopExcludedIds.push(String(byopFailedId));
-                    }
-                    try {
-                      const { setConnectionRateLimitUntil } = await import("@/lib/db/providers");
-                      setConnectionRateLimitUntil(
-                        String(byopFailedId),
-                        Date.now() + COOLDOWN_MS.gcpProjectRequired
-                      );
-                    } catch {
-                      // best-effort — never break the rotation path
-                    }
-                  }
-                  const byopNextCreds = await getProviderCredentials(
-                    "antigravity",
-                    null,
-                    null,
-                    modelToCall || model || requestedModel || null,
-                    { excludeConnectionIds: [...antigravityByopExcludedIds] }
-                  ).catch(() => null);
-                  if (byopNextCreds && !byopNextCreds.allRateLimited) {
-                    log?.warn?.(
-                      "ANTIGRAVITY_BYOP_ROTATION",
-                      `BYOP 422 on connection ${String(byopFailedId).slice(0, 8)} → rotating to ${String(byopNextCreds.connectionId).slice(0, 8)}`
-                    );
-                    releaseAccountSemaphore();
-                    Object.assign(credentials, byopNextCreds);
-                    antigravityByopRotationPending = true;
-                    continue;
-                  }
                 }
               }
 
@@ -3776,13 +3607,84 @@ export async function handleChatCore({
   let finalBody;
   let claudePromptCacheLogMeta = null;
 
+  let pipelineRecovered = false;
   try {
-    const result = await executeProviderRequest(effectiveModel, true);
+    const pipelineOutcome = await runProviderExecutionPipeline({
+      policy: {
+        allowAccountRotation: true,
+        allowModelFallback: true,
+      },
+      target: {
+        provider,
+        requestedModel: effectiveModel,
+        sourceFormat,
+        targetFormat,
+        stream,
+      },
+      connection: {
+        initialConnectionId: String(getCurrentConnectionId() || connectionId || ""),
+        getCurrentConnectionId: () => getCurrentConnectionId() || undefined,
+        getCredentials: () => (credentials || {}) as Record<string, unknown>,
+        replaceCredentials: (next) => {
+          Object.assign(credentials, next);
+        },
+        onCredentialsRefreshed: async () => {},
+        assertManagedLeaseFence: (id) => {
+          assertManagedLeaseFence(id);
+        },
+        getProviderCredentials,
+      },
+      wire: {
+        body: translatedBody as Record<string, unknown>,
+        currentModel,
+        triedModels,
+        setBodyAndModel: (body, model) => {
+          translatedBody = body as typeof translatedBody;
+          currentModel = model;
+          triedModels.add(model);
+        },
+      },
+      state: {
+        updatePendingStage: (stage, data) => {
+          updatePendingScope(pendingScope, { stage, ...(data || {}) });
+        },
+        recordRateLimitHeaders: updateFromHeaders,
+        recordRateLimitBody: updateFromResponseBody,
+        writeTerminalStatus,
+        persistConnectionPatch: updateProviderConnection,
+        setConnectionRateLimitedUntil: async (id, untilMs) => {
+          const { setConnectionRateLimitUntil } = await import("@/lib/db/providers");
+          setConnectionRateLimitUntil(id, untilMs);
+        },
+        lockModel,
+        recordAntigravityQuotaState: recordCoreOwnedAntigravityQuotaState,
+        markAccountSemaphoreBlocked: (key) => {
+          markAccountSemaphoreBlocked(key, Date.now() + 60_000);
+        },
+        isolateProbeFailures: () => shouldIsolateProbeFailures(),
+      },
+      sendProviderAttempt: (modelToCall, allowDedup) => executeProviderRequest(modelToCall, allowDedup),
+    });
 
-    providerResponse = result.response;
-    providerUrl = result.url;
-    providerHeaders = result.headers;
-    finalBody = providerRequestCapture.body(result.transformedBody);
+    pipelineRecovered = true;
+    currentModel = pipelineOutcome.model;
+    if (pipelineOutcome.kind === "error") {
+      providerResponse = pipelineOutcome.result.response;
+      providerUrl = "";
+      providerHeaders = normalizeHeaders(pipelineOutcome.result.response.headers);
+      finalBody = translatedBody;
+    } else {
+      const result = {
+        response: pipelineOutcome.response,
+        url: pipelineOutcome.url,
+        headers: pipelineOutcome.headers,
+        transformedBody: pipelineOutcome.transformedBody,
+      };
+      providerResponse = result.response;
+      providerUrl = result.url;
+      providerHeaders = result.headers;
+      finalBody = providerRequestCapture.body(result.transformedBody);
+    }
     const responseConnectionId = getCurrentConnectionId();
     effectiveServiceTier = resolveEffectiveServiceTier(finalBody);
     claudePromptCacheLogMeta = buildClaudePromptCacheLogMeta(
@@ -4165,7 +4067,9 @@ export async function handleChatCore({
       );
     }
 
-    const signatureRecovery = await recoverAnthropicThinkingSignature({
+    const signatureRecovery = pipelineRecovered
+      ? { attempted: false, succeeded: false, execution: null, error: null, recoveryBody: null }
+      : await recoverAnthropicThinkingSignature({
       provider,
       statusCode,
       message,
@@ -4176,7 +4080,7 @@ export async function handleChatCore({
       },
       parseError: (response) => parseUpstreamError(response, provider),
     });
-    if (signatureRecovery.attempted && signatureRecovery.execution) {
+    if (!pipelineRecovered && signatureRecovery.attempted && signatureRecovery.execution) {
       providerResponse = signatureRecovery.execution.response;
       if (signatureRecovery.succeeded) {
         providerUrl = signatureRecovery.execution.url;
@@ -4588,7 +4492,7 @@ export async function handleChatCore({
     // Before returning a model-unavailable error upstream, try sibling models
     // from the same family. This keeps the request alive on the same account
     // instead of failing the entire combo.
-    if (isModelUnavailableError(statusCode, message, provider)) {
+    if (!pipelineRecovered && isModelUnavailableError(statusCode, message, provider)) {
       const nextModel = getNextFamilyFallback(currentModel, triedModels, provider);
       if (nextModel) {
         triedModels.add(nextModel);
