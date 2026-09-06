@@ -594,7 +594,8 @@ function getOpenAIIntermediateChunks(value: unknown): unknown[] {
 
 export function restoreClaudePassthroughToolUseName(
   parsed: JsonRecord,
-  toolNameMap: unknown
+  toolNameMap: unknown,
+  requestTools?: unknown
 ): boolean {
   const block =
     parsed.content_block && typeof parsed.content_block === "object"
@@ -602,12 +603,65 @@ export function restoreClaudePassthroughToolUseName(
       : null;
   if (!block || block.type !== "tool_use" || typeof block.name !== "string") return false;
 
+  // Alias map first: when the request path renamed tools, its entries map the
+  // upstream (renamed) spelling back to the CLIENT's original spelling — the
+  // only source that knows it.
   const map = toolNameMap instanceof Map ? toolNameMap : null;
-  const restoredName = restoreClaudeToolName(block.name, map);
+  if (map && map.size > 0) {
+    const restoredName = restoreClaudeToolName(block.name, map);
+    if (restoredName !== block.name) {
+      block.name = restoredName;
+      return true;
+    }
+  }
 
-  if (restoredName === block.name) return false;
-  block.name = restoredName;
-  return true;
+  // No aliases (or the map matched verbatim): normalize upstream case drift
+  // to the request's DECLARED casing so a passthrough can never hand the
+  // client a name it did not declare. A mapless restore used to "upgrade"
+  // known Claude Code names (bash -> Bash) for clients that declared
+  // lowercase "bash" (pi/OpenCode on claude-format executors like
+  // devin-cli-agentic), breaking tool dispatch and the echoed history
+  // (#12721). Conversely a genuine Claude Code client (declared "Bash")
+  // still gets "Bash" back when an OpenAI-style upstream downcased it
+  // (#7926).
+  const declaredName = findDeclaredToolName(requestTools, block.name);
+  if (declaredName !== null) {
+    if (declaredName === block.name) return false;
+    block.name = declaredName;
+    return true;
+  }
+
+  // No declared match and no alias: leave the upstream name verbatim instead
+  // of canonicalizing it (server tools, tool_choice-free probes, ...).
+  return false;
+}
+
+/**
+ * Exact- then case-insensitive lookup of `name` inside the request's tools[]
+ * (Anthropic `name` or OpenAI `function.name`). Returns the DECLARED spelling,
+ * or null when no declared tool matches (server tools, undeclared names).
+ */
+function findDeclaredToolName(requestTools: unknown, name: string): string | null {
+  if (!Array.isArray(requestTools)) return null;
+  const lower = name.toLowerCase();
+  let caseInsensitive: string | null = null;
+  for (const tool of requestTools) {
+    if (!tool || typeof tool !== "object" || Array.isArray(tool)) continue;
+    const item = tool as JsonRecord;
+    const directName = typeof item.name === "string" ? item.name.trim() : "";
+    const fn =
+      item.function && typeof item.function === "object" && !Array.isArray(item.function)
+        ? (item.function as JsonRecord)
+        : null;
+    const functionName = typeof fn?.name === "string" ? fn.name.trim() : "";
+    const declared = functionName || directName;
+    if (!declared) continue;
+    if (declared === name) return declared;
+    if (caseInsensitive === null && declared.toLowerCase() === lower) {
+      caseInsensitive = declared;
+    }
+  }
+  return caseInsensitive;
 }
 
 // Note: TextDecoder/TextEncoder are created per-stream inside createSSEStream()
@@ -1080,7 +1134,8 @@ export function createSSEStream(options: StreamOptions = {}) {
       cacheHit: false,
       latencyMs: Date.now() - streamStartedAt,
       usage: timing.withTps(finalUsage),
-      costUsd, ttftMs: timing.ttftMs(),
+      costUsd,
+      ttftMs: timing.ttftMs(),
     });
     if (!comment) return;
     reqLogger?.appendConvertedChunk?.(comment);
@@ -1736,7 +1791,11 @@ export function createSSEStream(options: StreamOptions = {}) {
                     return;
                   }
                   updateClaudeEmptyResponseLifecycle(claudeEmptyResponseLifecycle, parsed);
-                  const restoredToolName = restoreClaudePassthroughToolUseName(parsed, toolNameMap);
+                  const restoredToolName = restoreClaudePassthroughToolUseName(
+                    parsed,
+                    toolNameMap,
+                    body
+                  );
                   // Track content length and accumulate from Claude format
                   if (parsed.delta?.text) {
                     totalContentLength += parsed.delta.text.length;
@@ -2046,7 +2105,9 @@ export function createSSEStream(options: StreamOptions = {}) {
                   // estimate is now emitted in flush(), only when the upstream stayed silent.
                   if (isFinishChunk && hasValidUsage(usage) && !passthroughForwardedUsage) {
                     const buffered = addBufferToUsage(usage);
-                    parsed.usage = timing.withTps(filterUsageForFormat(buffered, sourceFormat || FORMATS.OPENAI));
+                    parsed.usage = timing.withTps(
+                      filterUsageForFormat(buffered, sourceFormat || FORMATS.OPENAI)
+                    );
                     output = `data: ${JSON.stringify(parsed)}\n\n`;
                     passthroughForwardedUsage = true;
                     injectedUsage = true;
@@ -2571,7 +2632,9 @@ export function createSSEStream(options: StreamOptions = {}) {
                   created: Math.floor(Date.now() / 1000),
                   model,
                   choices: [],
-                  usage: timing.withTps(filterUsageForFormat(usage, sourceFormat || FORMATS.OPENAI)),
+                  usage: timing.withTps(
+                    filterUsageForFormat(usage, sourceFormat || FORMATS.OPENAI)
+                  ),
                 };
                 const usageOutput = `data: ${JSON.stringify(usageOnlyChunk)}\n\n`;
                 reqLogger?.appendConvertedChunk?.(usageOutput);
