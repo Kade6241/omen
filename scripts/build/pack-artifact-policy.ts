@@ -54,6 +54,9 @@ export const APP_STAGING_ALLOWED_EXACT_PATHS: string[] = [
   // tests/unit/pack-artifact-server-ws-closure.test.ts.
   "systemd-notify.mjs",
   "responses-ws-proxy.mjs",
+  // server-ws.mjs import (self-probe wedge watchdog) — enforced by the closure
+  // test tests/unit/pack-artifact-server-ws-closure.test.ts.
+  "self-probe-watchdog.mjs",
   "bin/chatgpt-web-codex-mcp.mjs",
   "scripts/dev/sync-env.mjs",
   "scripts/dev/tls-options.mjs",
@@ -203,6 +206,9 @@ export const PACK_ARTIFACT_REQUIRED_PATHS: string[] = [
   // #7065: regression guard for the HEAD response guard (dist/server-ws.mjs import).
   "dist/head-response-guard.cjs",
   "dist/webdav-handler.mjs",
+  // #7065-class: regression guard for the self-probe watchdog (dist/server-ws.mjs
+  // import; enforced by tests/unit/pack-artifact-entrypoint-closures.test.ts).
+  "dist/self-probe-watchdog.mjs",
   "bin/cli/program.mjs",
   // Direct imports of bin/omniroute.mjs — bin/cli/ is only an allowlist PREFIX, so a
   // file vanishing from the tarball never fails the unexpected-paths check; only these

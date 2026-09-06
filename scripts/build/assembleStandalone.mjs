@@ -240,6 +240,11 @@ const EXTRA_MODULE_ENTRIES = [
     dest: ["webdav-handler.mjs"],
   },
   {
+    label: "self-probe watchdog (server-ws.mjs dependency)",
+    src: ["scripts", "dev", "self-probe-watchdog.mjs"],
+    dest: ["self-probe-watchdog.mjs"],
+  },
+  {
     // #5242: opt-in HTTPS/TLS resolver (server-ws.mjs dependency).
     label: "tls-options (server-ws.mjs dependency)",
     src: ["scripts", "dev", "tls-options.mjs"],
