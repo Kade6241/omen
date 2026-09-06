@@ -235,7 +235,12 @@ export async function expandTargetsByQuotaAwareConnections(
       if (
         !opts?.skipExhaustionFilter &&
         provider &&
-        isQuotaExhaustedForRequest(connectionId, provider, target.modelStr || null)
+        isQuotaExhaustedForRequest(
+          connectionId,
+          provider,
+          target.modelStr || null,
+          connection?.providerSpecificData
+        )
       ) {
         continue;
       }

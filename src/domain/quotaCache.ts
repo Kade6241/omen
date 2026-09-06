@@ -407,7 +407,10 @@ function isStandardQuotaExhausted(entry: QuotaCacheEntry, now: number): boolean 
 export function isQuotaExhaustedForRequest(
   connectionId: string,
   provider: string,
-  requestedModel: string | null = null
+  requestedModel: string | null = null,
+  // Combo expand forwards this so extra-usage can honor blockExtraUsage=false
+  // without rewriting the call site. Unused on this branch.
+  _providerSpecificData?: unknown
 ): boolean {
   const entry = getState().cache.get(connectionId) || hydrateQuotaCacheFromSnapshots(connectionId);
   if (!entry) return false;
