@@ -106,6 +106,8 @@ import {
 } from "./chatCore/passthroughHelpers.ts";
 import { recoverAnthropicThinkingSignature } from "./chatCore/thinkingSignatureRecovery.ts";
 import { runProviderExecutionPipeline } from "./chatCore/providerExecutionPipeline.ts";
+import { markCodexScopeRateLimited } from "./chatCore/codexFailover.ts";
+import { deleteSessionAccountAffinity } from "@/lib/db/sessionAccountAffinity";
 import {
   buildStreamingResponseHeaders,
   materializeDeduplicatedExecutionResult,
@@ -336,7 +338,7 @@ import {
   resolveConnectionTimeoutMs,
 } from "./chatCore/upstreamTimeouts.ts";
 import { getModelNormalizeToolCallId, getModelPreserveOpenAIDeveloperRole } from "@/lib/db/models";
-import { getProviderCredentials } from "@/sse/services/auth";
+import { getProviderCredentials, extractSessionAffinityKey } from "@/sse/services/auth";
 import { assertExclusiveConnectionLeaseFence } from "@/lib/db/exclusiveConnectionLeases";
 
 import { getCacheControlSettings } from "@/lib/cacheControlSettings";
@@ -3265,18 +3267,24 @@ export async function handleChatCore({
               }
 
               // For streaming: release the semaphore when the client drains or cancels the stream.
+              // Non-2xx streams must drop the slot before returning so the pipeline can rotate
+              // accounts without holding the failed connection's concurrency gate.
               if (stream) {
                 const originalBody = res.response.body;
-                if (!originalBody) {
+                const okStatus = res.response.status >= 200 && res.response.status < 300;
+                if (!originalBody || !okStatus) {
                   releaseAccountSemaphore();
-                  return res;
+                  originalBody?.cancel().catch(() => {});
+                  return {
+                    ...res,
+                    _executionCredentials: execCreds,
+                  };
                 }
 
                 // Opt-in transparent stream recovery (free-claude-code port, default OFF).
                 // Only engages for a successful (2xx) stream — an error body must never be
                 // held or replayed. Setting is read once here from the cached resolved
                 // resilience settings; the default path is byte-for-byte unchanged.
-                const okStatus = res.response.status >= 200 && res.response.status < 300;
                 let streamRecoveryEnabled = false;
                 let continueMidStreamEnabled = false;
                 let throughputWatchdog =
@@ -3611,8 +3619,11 @@ export async function handleChatCore({
   try {
     const pipelineOutcome = await runProviderExecutionPipeline({
       policy: {
-        allowAccountRotation: true,
+        allowAccountRotation: !managedLease && comboStrategy !== "context-relay",
         allowModelFallback: true,
+        expectedConnectionId: managedLease
+          ? String(getCurrentConnectionId() || connectionId || "") || undefined
+          : undefined,
       },
       target: {
         provider,
@@ -3662,6 +3673,42 @@ export async function handleChatCore({
           markAccountSemaphoreBlocked(key, Date.now() + 60_000);
         },
         isolateProbeFailures: () => shouldIsolateProbeFailures(),
+        onCodexScopeRateLimited: async (params) => {
+          await markCodexScopeRateLimited({
+            failedConnectionId: params.failedConnectionId,
+            model: params.model,
+            rateLimitedUntil: params.rateLimitedUntil,
+            credentials: (params.credentials || credentials) as {
+              connectionId?: string | null;
+              providerSpecificData?: unknown;
+            },
+          });
+        },
+        onClearSessionAffinity: () => {
+          const key =
+            sessionAffinityKey ||
+            extractSessionAffinityKey(body, clientRawRequest?.headers) ||
+            null;
+          if (!key) return;
+          try {
+            deleteSessionAccountAffinity(key, "codex");
+          } catch {
+            // best-effort
+          }
+        },
+        onAuditAccountRotation: (params) => {
+          logAuditEvent({
+            action: params.action,
+            actor: apiKeyInfo?.name || "system",
+            target: params.newConnectionId,
+            details: {
+              failed_connection_id: params.failedConnectionId,
+              new_connection_id: params.newConnectionId,
+              attempt: params.attempt,
+              retry_after_ms: params.retryAfterMs,
+            },
+          });
+        },
       },
       sendProviderAttempt: (modelToCall, allowDedup) => executeProviderRequest(modelToCall, allowDedup),
     });

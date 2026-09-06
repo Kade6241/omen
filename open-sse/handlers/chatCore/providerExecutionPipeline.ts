@@ -8,6 +8,7 @@ import { createErrorResult } from "../../utils/error.ts";
 import { applyStatusRestatement } from "../../config/upstreamStatusRestatement.ts";
 import { recoverAnthropicThinkingSignature } from "./thinkingSignatureRecovery.ts";
 import { isModelUnavailableError, getNextFamilyFallback as defaultGetNextFamilyFallback } from "../../services/modelFamilyFallback.ts";
+import { COOLDOWN_MS } from "../../config/errorConfig.ts";
 
 export interface ChatCoreExecutorResult {
   response: Response;
@@ -85,6 +86,20 @@ export interface PipelineStateHooks {
   recordAntigravityQuotaState: typeof recordCoreOwnedAntigravityQuotaState;
   markAccountSemaphoreBlocked: (connectionId: string) => void;
   isolateProbeFailures: () => boolean | Promise<boolean>;
+  onCodexScopeRateLimited?: (params: {
+    failedConnectionId: string;
+    model: string | null;
+    rateLimitedUntil: string;
+    credentials?: Record<string, unknown> | null;
+  }) => void | Promise<void>;
+  onClearSessionAffinity?: (params: { failedConnectionId: string }) => void | Promise<void>;
+  onAuditAccountRotation?: (params: {
+    action: "codex.account_rotation";
+    failedConnectionId: string;
+    newConnectionId: string;
+    attempt: number;
+    retryAfterMs: number | null;
+  }) => void | Promise<void>;
 }
 
 export interface ProviderExecutionPipelineInput {
@@ -106,6 +121,14 @@ const LEASE_MISMATCH_CODE = "LEASE_CONNECTION_MISMATCH";
 
 function currentConnectionId(connection: PipelineConnectionContext): string {
   return connection.getCurrentConnectionId() ?? connection.initialConnectionId;
+}
+
+function retryAfterMsFrom(attempt: ChatCoreExecutorResult): number | null {
+  const raw = attempt.headers?.["retry-after"] ?? attempt.headers?.["Retry-After"];
+  if (raw == null || raw === "") return null;
+  const parsed = Number.parseFloat(String(raw));
+  if (!Number.isFinite(parsed) || parsed < 0) return null;
+  return parsed * 1000;
 }
 
 function leaseMismatch(model: string, connectionId: string): ProviderExecutionOutcome {
@@ -256,13 +279,30 @@ export async function runProviderExecutionPipeline(
       attempts < maxAttempts - 1
     ) {
       const failedId = currentConnectionId(connection);
+      const retryAfterMs = retryAfterMsFrom(attempt);
       if (failedId && !excludedIds.includes(failedId)) excludedIds.push(failedId);
+      if (failedId) {
+        await state.onCodexScopeRateLimited?.({
+          failedConnectionId: failedId,
+          model: wire.currentModel || target.requestedModel || null,
+          rateLimitedUntil: new Date(Date.now() + (retryAfterMs || 60_000)).toISOString(),
+          credentials: connection.getCredentials(),
+        });
+        await state.onClearSessionAffinity?.({ failedConnectionId: failedId });
+      }
       const nextCreds = await connection
         .getProviderCredentials("codex", null, null, wire.currentModel, {
           excludeConnectionIds: [...excludedIds],
         })
         .catch(() => null);
       if (nextCreds && !nextCreds.allRateLimited && nextCreds.connectionId) {
+        await state.onAuditAccountRotation?.({
+          action: "codex.account_rotation",
+          failedConnectionId: failedId,
+          newConnectionId: String(nextCreds.connectionId),
+          attempt: attempts + 1,
+          retryAfterMs,
+        });
         connection.replaceCredentials(nextCreds as Record<string, unknown>);
         attempts += 1;
         continue;
@@ -277,6 +317,12 @@ export async function runProviderExecutionPipeline(
       if (byopBody.includes("gcp_project_required")) {
         const failedId = currentConnectionId(connection);
         if (failedId && !excludedIds.includes(failedId)) excludedIds.push(failedId);
+        if (failedId) {
+          await state.setConnectionRateLimitedUntil(
+            failedId,
+            Date.now() + (COOLDOWN_MS.gcpProjectRequired ?? 24 * 60 * 60 * 1000)
+          );
+        }
         const nextCreds = await connection
           .getProviderCredentials("antigravity", null, null, wire.currentModel, {
             excludeConnectionIds: [...excludedIds],

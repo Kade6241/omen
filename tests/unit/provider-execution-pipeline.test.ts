@@ -65,6 +65,7 @@ function makeInput(opts: {
   refreshCredentials?: PipelineConnectionContext["refreshCredentials"];
   onCredentialsRefreshed?: PipelineConnectionContext["onCredentialsRefreshed"];
   getNextFamilyFallback?: ProviderExecutionPipelineInput["getNextFamilyFallback"];
+  state?: Partial<PipelineStateHooks>;
 }): ProviderExecutionPipelineInput {
   const model = opts.model ?? "gpt-5";
   const connectionId = opts.connectionId ?? "conn-a";
@@ -111,7 +112,7 @@ function makeInput(opts: {
     target,
     connection,
     wire,
-    state: noopState(),
+    state: { ...noopState(), ...(opts.state || {}) },
     sendProviderAttempt: opts.send,
     getNextFamilyFallback: opts.getNextFamilyFallback,
   };
@@ -470,4 +471,105 @@ test("follow-up allowModelFallback=false blocks model-unavailable fallback", asy
     assert.equal(outcome.result.status, 404);
     assert.equal(outcome.model, "gpt-5");
   }
+});
+
+test("Codex 429 rotation calls scope-rate-limit, affinity-clear, and audit hooks", async () => {
+  const { runProviderExecutionPipeline } = await import(
+    "../../open-sse/handlers/chatCore/providerExecutionPipeline.ts"
+  );
+  const rateLimited: Array<Record<string, unknown>> = [];
+  const affinityCleared: string[] = [];
+  const audits: Array<Record<string, unknown>> = [];
+  let sendCount = 0;
+  const input = makeInput({
+    policy: { allowAccountRotation: true, allowModelFallback: true },
+    provider: "codex",
+    connectionId: "conn-a",
+    send: async () => {
+      sendCount += 1;
+      if (sendCount === 1) {
+        return makeAttempt({ error: { message: "rate limited", type: "rate_limit_error" } }, 429, {
+          headers: { "retry-after": "2" },
+        });
+      }
+      return makeAttempt(
+        {
+          id: "chatcmpl-ok",
+          choices: [{ message: { role: "assistant", content: "rotated" }, finish_reason: "stop" }],
+        },
+        200
+      );
+    },
+    getProviderCredentials: (async () => ({
+      connectionId: "conn-b",
+      allRateLimited: false,
+    })) as PipelineConnectionContext["getProviderCredentials"],
+    state: {
+      onCodexScopeRateLimited: (params) => {
+        rateLimited.push(params as unknown as Record<string, unknown>);
+      },
+      onClearSessionAffinity: (params) => {
+        affinityCleared.push(params.failedConnectionId);
+      },
+      onAuditAccountRotation: (params) => {
+        audits.push(params as unknown as Record<string, unknown>);
+      },
+    },
+  });
+
+  const outcome = await runProviderExecutionPipeline(input);
+  assert.equal(outcome.kind, "response");
+  assert.equal(rateLimited.length, 1, "must persist Codex model-scope cooldown");
+  assert.equal(rateLimited[0]?.failedConnectionId, "conn-a");
+  assert.deepEqual(affinityCleared, ["conn-a"]);
+  assert.equal(audits.length, 1);
+  assert.equal(audits[0]?.action, "codex.account_rotation");
+  assert.equal(audits[0]?.failedConnectionId, "conn-a");
+  assert.equal(audits[0]?.newConnectionId, "conn-b");
+});
+
+test("Antigravity BYOP 422 rotation persists cooldown via setConnectionRateLimitedUntil", async () => {
+  const { runProviderExecutionPipeline } = await import(
+    "../../open-sse/handlers/chatCore/providerExecutionPipeline.ts"
+  );
+  const cooldowns: Array<{ id: string; untilMs: number | null }> = [];
+  let sendCount = 0;
+  const input = makeInput({
+    policy: { allowAccountRotation: true, allowModelFallback: true },
+    provider: "antigravity",
+    connectionId: "agy-a",
+    send: async () => {
+      sendCount += 1;
+      if (sendCount === 1) {
+        return makeAttempt(
+          { error: { message: "gcp_project_required", type: "invalid_request" } },
+          422
+        );
+      }
+      return makeAttempt(
+        {
+          id: "chatcmpl-ok",
+          choices: [{ message: { role: "assistant", content: "rotated" }, finish_reason: "stop" }],
+        },
+        200
+      );
+    },
+    getProviderCredentials: (async () => ({
+      connectionId: "agy-b",
+      allRateLimited: false,
+    })) as PipelineConnectionContext["getProviderCredentials"],
+    state: {
+      setConnectionRateLimitedUntil: (id, untilMs) => {
+        cooldowns.push({ id, untilMs });
+      },
+    },
+  });
+
+  const outcome = await runProviderExecutionPipeline(input);
+  assert.equal(outcome.kind, "response");
+  assert.equal(sendCount, 2);
+  assert.equal(cooldowns.length, 1, "BYOP rotate must persist cooldown before picking sibling");
+  assert.equal(cooldowns[0]?.id, "agy-a");
+  assert.equal(typeof cooldowns[0]?.untilMs, "number");
+  assert.equal((cooldowns[0]?.untilMs ?? 0) > Date.now(), true);
 });
