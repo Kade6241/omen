@@ -174,7 +174,8 @@ export async function expandTargetsByQuotaAwareConnections(
   targets: ResolvedComboTarget[],
   comboName: string,
   log: { warn?: (...args: unknown[]) => void },
-  apiKeyAllowedConnectionIds?: string[] | null
+  apiKeyAllowedConnectionIds?: string[] | null,
+  opts?: { skipExhaustionFilter?: boolean }
 ): Promise<{
   connectionById: Map<string, Record<string, unknown>>;
   expandedTargets: ResolvedComboTarget[];
@@ -229,6 +230,7 @@ export async function expandTargetsByQuotaAwareConnections(
         continue;
       }
       if (
+        !opts?.skipExhaustionFilter &&
         provider &&
         isQuotaExhaustedForRequest(
           connectionId,
