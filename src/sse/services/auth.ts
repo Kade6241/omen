@@ -51,7 +51,10 @@ import {
   getQuotaScopeLabelForProvider,
   isAntigravityQuotaProvider,
 } from "@omniroute/open-sse/services/antigravityQuotaFamily.ts";
-import { rehydrateAntigravityFamilyLocksForConnections, persistAntigravityFamilyCooldownIfQuota } from "@omniroute/open-sse/services/antigravityFamilyCooldown.ts";
+import {
+  rehydrateAntigravityFamilyLocksForConnections,
+  persistAntigravityFamilyCooldownIfQuota,
+} from "@omniroute/open-sse/services/antigravityFamilyCooldown.ts";
 import { markQuotaPreflightAccountUnavailable } from "./quotaPreflightUnavailable.ts";
 import { getCreditsMode } from "@omniroute/open-sse/services/antigravityCredits.ts";
 import { preferAntigravityConnectionsWithStoredProject } from "@omniroute/open-sse/services/antigravityProjectPersistence.ts";
@@ -111,6 +114,7 @@ import {
   toCodexBaseQuotaWindowName,
   toCodexScopedQuotaWindowName,
 } from "@omniroute/open-sse/config/codexQuotaScopes.ts";
+import { formatQuotaUsageReason } from "@omniroute/open-sse/services/quotaWindowLabel.ts";
 import {
   getCodexChildCooldown,
   isCodexChildUnavailable,
@@ -374,7 +378,16 @@ export function evaluateQuotaLimitPolicy(
       policy.thresholdPercent
     );
     if (!status?.reachedThreshold) continue;
-    reasons.push(`${effectiveWindowName} usage ${Math.round(status.usedPercentage)}%`);
+    reasons.push(
+      formatQuotaUsageReason(
+        {
+          key: effectiveWindowName,
+          displayName: status.displayName,
+          windowSeconds: status.windowSeconds,
+        },
+        status.usedPercentage
+      )
+    );
     resetCandidates.push(status.resetAt);
   }
 
@@ -2405,7 +2418,7 @@ export function isAgentrouterConnectionQuotaScope(
 }
 
 async function resolveDailyResetForProvider(
-  provider: string | null,
+  provider: string | null
 ): Promise<{ timezone?: unknown; hour?: unknown } | null> {
   if (!provider) return null;
   try {
@@ -2643,7 +2656,7 @@ export async function markAccountUnavailable(
       effectiveProviderProfile,
       null,
       null,
-      await resolveDailyResetForProvider(provider),
+      await resolveDailyResetForProvider(provider)
     );
 
     // T-PROBE: probe-origin failures (model test-all) must never remove the
@@ -2897,7 +2910,13 @@ export async function markAccountUnavailable(
         "AUTH",
         `Model-only lockout for ${provider}:${model} — ${status} ${reason} ${Math.ceil(lockout.cooldownMs / 1000)}s (failureCount=${lockout.failureCount}, connection stays active)`
       );
-      persistAntigravityFamilyCooldownIfQuota({ provider, connectionId, model, cooldownMs: lockout.cooldownMs, reason });
+      persistAntigravityFamilyCooldownIfQuota({
+        provider,
+        connectionId,
+        model,
+        cooldownMs: lockout.cooldownMs,
+        reason,
+      });
       return { shouldFallback: true, cooldownMs: lockout.cooldownMs };
     }
     const result = fallbackResult;
