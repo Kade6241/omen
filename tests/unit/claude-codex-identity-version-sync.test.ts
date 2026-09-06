@@ -12,6 +12,8 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
 
 const id = await import("../../open-sse/executors/claudeIdentity.ts");
 const hdr = await import("../../open-sse/config/anthropicHeaders.ts");
@@ -57,9 +59,38 @@ test("Claude CLI wire versions match the captured 2.1.258 binary", () => {
   assert.equal(hdr.CLAUDE_CLI_BILLING_VERSION, canonical.CLAUDE_CODE_CLIENT_BILLING_VERSION);
 });
 
-test("Codex client is pinned to the captured 0.149.0 release", () => {
-  assert.equal(codexCfg.getCodexClientVersion(), "0.149.0");
-  assert.equal(codexCfg.getCodexUserAgent(), "codex-cli/0.149.0 (Windows 10.0.26200; x64)");
-  assert.equal(codexCfg.getCodexDefaultHeaders().Version, "0.149.0");
-  assert.equal(codexCfg.getCodexCliRsHeaders()["User-Agent"], "codex_cli_rs/0.149.0");
+test("Codex client version locksteps Dockerfile @openai/codex and env override", () => {
+  const dockerfile = fs.readFileSync(path.join(process.cwd(), "Dockerfile"), "utf8");
+  const match = dockerfile.match(/@openai\/codex@([0-9]+\.[0-9]+\.[0-9]+)/);
+  assert.ok(match, "Dockerfile must pin @openai/codex@x.y.z");
+  const pinned = match[1];
+  assert.notEqual(pinned, "0.149.0");
+  assert.equal(codexCfg.DEFAULT_CODEX_CLIENT_VERSION, pinned);
+  assert.equal(codexCfg.getCodexClientVersion(), pinned);
+  assert.equal(codexCfg.getCodexDefaultHeaders().Version, pinned);
+  assert.equal(
+    codexCfg.getCodexCliRsHeaders()["User-Agent"],
+    `codex_cli_rs/${pinned}`,
+  );
+});
+
+test("test 7: live-empty GitHub catalog path does not call persist", () => {
+  const src = fs.readFileSync(
+    path.join(process.cwd(), "src/app/api/providers/[id]/models/route.ts"),
+    "utf8",
+  );
+  // The githubCatalogModels fallback must use buildResponse, not buildApiDiscoveryResponse.
+  const idx = src.indexOf("Codex live catalog unavailable — using GitHub model catalog");
+  assert.ok(idx > 0);
+  const start = src.lastIndexOf("if (githubCatalogModels", idx);
+  const end = src.indexOf("if (cachedDiscoveryModels", idx);
+  assert.ok(start > 0 && end > start);
+  const window = src.slice(start, end);
+  assert.match(window, /buildResponse\s*\(/);
+  assert.doesNotMatch(window, /buildApiDiscoveryResponse\s*\(/);
+
+  const liveIdx = src.lastIndexOf("if (liveModels && liveModels.length > 0)");
+  assert.ok(liveIdx > 0 && liveIdx < start);
+  const liveWindow = src.slice(liveIdx, start);
+  assert.match(liveWindow, /buildApiDiscoveryResponse\s*\(/);
 });
