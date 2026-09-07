@@ -1,0 +1,1 @@
+- **fix(changelog):** make the `#12637` fragment start with a markdown bullet so `check-changelog-integrity` stops failing on every open PR ([#12932](https://github.com/diegosouzapw/OmniRoute/pull/12932))
