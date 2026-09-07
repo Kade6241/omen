@@ -8,6 +8,55 @@ const providerPageStorage =
 const providers = await import("../../src/shared/constants/providers.ts");
 const providerCatalog = await import("../../src/lib/providers/catalog.ts");
 
+test("Dario local preset visibility respects filters and explicit capability", () => {
+  const darioConnection = {
+    provider: "anthropic-compatible-12345678-abcd-4abc-8abc-123456789abc",
+    authType: "apikey",
+    providerSpecificData: { usageAdapter: "dario" },
+  };
+  const genericConnection = {
+    provider: darioConnection.provider,
+    authType: "apikey",
+    providerSpecificData: { baseUrl: "https://dario.example/v1" },
+  };
+
+  assert.equal(providerPageUtils.shouldShowDarioLocalPreset({ connections: [] }), true);
+  assert.equal(
+    providerPageUtils.shouldShowDarioLocalPreset({ connections: [], searchQuery: "dario" }),
+    true
+  );
+  assert.equal(
+    providerPageUtils.shouldShowDarioLocalPreset({ connections: [], searchQuery: "lm studio" }),
+    false
+  );
+  assert.equal(
+    providerPageUtils.shouldShowDarioLocalPreset({ connections: [], showFreeOnly: true }),
+    false
+  );
+  assert.equal(
+    providerPageUtils.shouldShowDarioLocalPreset({ connections: [], modelSearchQuery: "claude" }),
+    false
+  );
+  assert.equal(
+    providerPageUtils.shouldShowDarioLocalPreset({ connections: [], serviceKindFilter: "image" }),
+    false
+  );
+  assert.equal(
+    providerPageUtils.shouldShowDarioLocalPreset({
+      connections: [genericConnection],
+      showConfiguredOnly: true,
+    }),
+    false
+  );
+  assert.equal(
+    providerPageUtils.shouldShowDarioLocalPreset({
+      connections: [darioConnection],
+      showConfiguredOnly: true,
+    }),
+    true
+  );
+});
+
 test("merged OAuth providers keep free-tier providers in the OAuth section", () => {
   const statsCalls = [];
   const getProviderStats = (providerId, authType) => {

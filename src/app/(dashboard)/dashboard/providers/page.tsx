@@ -29,6 +29,7 @@ import {
   connectionMatchesProviderCard,
   filterConfiguredProviderEntries,
   shouldFilterProviderEntriesForDisplayMode,
+  shouldShowDarioLocalPreset,
   shouldShowFirstProviderHint,
   shouldShowProviderSection,
   upsertProviderNodeById,
@@ -62,6 +63,7 @@ const ImportProvidersFromFileModal = dynamic(
 );
 import NoAuthProvidersSection from "./components/NoAuthProvidersSection";
 import HighlightableProviderCard from "./components/HighlightableProviderCard";
+import DarioLocalProviderCard from "./components/DarioLocalProviderCard";
 import ProviderCountBadge from "./components/ProviderCountBadge";
 import ProviderSummaryCard from "./components/ProviderSummaryCard";
 import {
@@ -665,6 +667,17 @@ export default function ProvidersPage() {
     activeServiceKind,
     liveModelsByProviderId
   );
+  const showDarioLocalPreset = shouldShowDarioLocalPreset({
+    connections,
+    showConfiguredOnly: effectiveShowConfiguredOnly,
+    searchQuery,
+    showFreeOnly,
+    modelSearchQuery,
+    serviceKindFilter: activeServiceKind,
+  });
+  const hasConfiguredDario = connections.some(
+    (connection) => connection.providerSpecificData?.usageAdapter === "dario"
+  );
 
   const searchProviderEntriesAll = buildStaticProviderEntries("search", getProviderStats);
   const searchProviderEntries = filterConfiguredProviderEntries(
@@ -1025,9 +1038,6 @@ export default function ProvidersPage() {
                         {addCcCompatibleLabel}
                       </Button>
                     )}
-                    <Button size="sm" icon="add" onClick={() => setShowAddDarioModal(true)}>
-                      {providerText(t, "addDario", "Add Dario")}
-                    </Button>
                     <Button
                       size="sm"
                       icon="add"
@@ -1570,7 +1580,7 @@ export default function ProvidersPage() {
             )}
 
             {/* Local / Self-Hosted Providers */}
-            {showSection("local") && localProviderEntries.length > 0 && (
+            {showSection("local") && (localProviderEntries.length > 0 || showDarioLocalPreset) && (
               <div className="flex flex-col gap-4">
                 <div className="flex flex-wrap items-center gap-2">
                   <h2 className="text-xl font-semibold flex items-center gap-2 flex-1 min-w-0">
@@ -1601,6 +1611,12 @@ export default function ProvidersPage() {
                 </div>
                 <p className="text-sm text-text-muted -mt-2">{t("localProvidersDesc")}</p>
                 <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-4 gap-3">
+                  {showDarioLocalPreset && (
+                    <DarioLocalProviderCard
+                      configured={hasConfiguredDario}
+                      onCreate={() => setShowAddDarioModal(true)}
+                    />
+                  )}
                   {localProviderEntries.map(({ providerId, provider, stats, toggleAuthType }) => (
                     <HighlightableProviderCard
                       key={providerId}

@@ -22,6 +22,7 @@ import {
   type ProviderDisplayMode,
 } from "./providerPageStorage";
 import { getFeaturedProviderRank } from "./featuredProviders";
+import { isDarioUsageConnection } from "@omniroute/open-sse/services/usage/adapter";
 
 export interface ProviderStatsSnapshot {
   total?: number;
@@ -73,6 +74,27 @@ export function shouldShowFirstProviderHint(
   searchQuery?: string
 ): boolean {
   return connectionCount === 0 && !searchQuery?.trim();
+}
+
+export function shouldShowDarioLocalPreset(options: {
+  connections: Array<{
+    provider?: unknown;
+    authType?: unknown;
+    providerSpecificData?: unknown;
+  }>;
+  showConfiguredOnly?: boolean;
+  searchQuery?: string;
+  showFreeOnly?: boolean;
+  modelSearchQuery?: string;
+  serviceKindFilter?: string | null;
+}): boolean {
+  if (options.showFreeOnly || options.modelSearchQuery?.trim()) return false;
+  if (options.serviceKindFilter && options.serviceKindFilter !== "llm") return false;
+  if (options.searchQuery?.trim() && !matchesAnyToken("Dario", options.searchQuery)) return false;
+  if (options.showConfiguredOnly) {
+    return options.connections.some((connection) => isDarioUsageConnection(connection));
+  }
+  return true;
 }
 
 export function syncSearchToUrl(searchQuery: string): void {
