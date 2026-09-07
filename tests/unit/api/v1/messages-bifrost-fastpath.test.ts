@@ -18,10 +18,13 @@ test("POST /v1/messages: forwards to bifrost when active and eligible", async ()
   let capturedTargetUrl = "";
   globalThis.fetch = async (url, _init) => {
     capturedTargetUrl = String(url);
-    return new Response(JSON.stringify({ id: "msg-fastpath-123", role: "assistant", content: [] }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
+    return new Response(
+      JSON.stringify({ id: "msg-fastpath-123", role: "assistant", content: [] }),
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }
+    );
   };
 
   const { POST } = await import(

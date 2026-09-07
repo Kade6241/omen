@@ -160,10 +160,7 @@ export function getRoutingFallbackHeader(
 }
 
 export type RoutingFallbackReasonCode =
-  | "bifrost-cooldown"
-  | "bifrost-error"
-  | "bifrost-ineligible"
-  | "bifrost-provider-unknown";
+  "bifrost-cooldown" | "bifrost-error" | "bifrost-ineligible" | "bifrost-provider-unknown";
 
 const ROUTING_FALLBACK_REASON_CODES = new Set<RoutingFallbackReasonCode>([
   "bifrost-cooldown",

@@ -267,11 +267,7 @@ export async function POST(request) {
     let fallbackHeaderValue: string | undefined = undefined;
 
     if (parsedBodyIsRecord && bifrostConfig) {
-      const bifrostDecision = shouldTryBifrostForRequest(
-        relayBackend,
-        bifrostConfig,
-        parsedBody
-      );
+      const bifrostDecision = shouldTryBifrostForRequest(relayBackend, bifrostConfig, parsedBody);
 
       if (bifrostDecision.tryBifrost) {
         const cooldown =
@@ -289,10 +285,7 @@ export async function POST(request) {
             if (bifrostResult.statusCode < 500) {
               clearBifrostFailure(bifrostConfig.baseUrl);
               return finishAdmission(
-                withCompressionHeaderEcho(
-                  bifrostResult.response,
-                  compressionRequestHeader
-                )
+                withCompressionHeaderEcho(bifrostResult.response, compressionRequestHeader)
               );
             }
 
@@ -312,10 +305,7 @@ export async function POST(request) {
       if (!bifrostConfig) return res;
       const fallbackHeader = getRoutingFallbackHeader(relayBackend, bifrostConfig);
       if (fallbackHeader || fallbackHeaderValue) {
-        res.headers.set(
-          "X-Routing-Fallback",
-          fallbackHeaderValue || fallbackHeader || "bifrost"
-        );
+        res.headers.set("X-Routing-Fallback", fallbackHeaderValue || fallbackHeader || "bifrost");
         const reasonCode = getRoutingFallbackReasonHeader(fallbackHeaderValue);
         if (reasonCode) {
           res.headers.set("X-Routing-Fallback-Reason", reasonCode);

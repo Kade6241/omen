@@ -52,7 +52,9 @@ test("bifrostClient: dispatchToBifrost handles streaming response and finalizer"
     return new Response(
       new ReadableStream<Uint8Array>({
         start(controller) {
-          controller.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"content":"Hi"}}]}\n\n'));
+          controller.enqueue(
+            new TextEncoder().encode('data: {"choices":[{"delta":{"content":"Hi"}}]}\n\n')
+          );
           controller.close();
         },
       }),

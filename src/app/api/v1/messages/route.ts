@@ -87,11 +87,7 @@ async function postHandler(request: any, context: any, preParsedBody: any = null
   let fallbackHeaderValue: string | undefined = undefined;
 
   if (body && typeof body === "object" && bifrostConfig) {
-    const bifrostDecision = shouldTryBifrostForRequest(
-      relayBackend,
-      bifrostConfig,
-      body
-    );
+    const bifrostDecision = shouldTryBifrostForRequest(relayBackend, bifrostConfig, body);
 
     if (bifrostDecision.tryBifrost) {
       const cooldown =
@@ -126,10 +122,7 @@ async function postHandler(request: any, context: any, preParsedBody: any = null
     if (!bifrostConfig) return res;
     const fallbackHeader = getRoutingFallbackHeader(relayBackend, bifrostConfig);
     if (fallbackHeader || fallbackHeaderValue) {
-      res.headers.set(
-        "X-Routing-Fallback",
-        fallbackHeaderValue || fallbackHeader || "bifrost"
-      );
+      res.headers.set("X-Routing-Fallback", fallbackHeaderValue || fallbackHeader || "bifrost");
       const reasonCode = getRoutingFallbackReasonHeader(fallbackHeaderValue);
       if (reasonCode) {
         res.headers.set("X-Routing-Fallback-Reason", reasonCode);

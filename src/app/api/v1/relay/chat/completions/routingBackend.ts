@@ -11,5 +11,5 @@ export {
   type ProviderSidecarLookup,
   type BifrostRoutingDecision,
   type RoutingFallbackReasonCode,
-} from "../../../../../shared/services/bifrost/bifrostRouting.ts";
+} from "@/shared/services/bifrost/bifrostRouting";
 

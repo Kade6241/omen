@@ -5,6 +5,5 @@ export {
   clearBifrostFailure,
   resetBifrostCooldowns,
   type ActiveBifrostCooldown,
-} from "../../../../../../shared/services/bifrost/bifrostRouting.ts";
-
+} from "@/shared/services/bifrost/bifrostRouting";
 

@@ -37,10 +37,16 @@ test("bifrostRouting: getBifrostRoutingConfig returns null when unconfigured and
 });
 
 test("bifrostRouting: resolveRelayRoutingBackend resolves configured or auto", () => {
-  assert.equal(resolveRelayRoutingBackend({ OMNIROUTE_RELAY_BACKEND: "bifrost" } as any), "bifrost");
+  assert.equal(
+    resolveRelayRoutingBackend({ OMNIROUTE_RELAY_BACKEND: "bifrost" } as any),
+    "bifrost"
+  );
   assert.equal(resolveRelayRoutingBackend({ OMNIROUTE_RELAY_BACKEND: "ts" } as any), "ts");
   assert.equal(
-    resolveRelayRoutingBackend({ BIFROST_BASE_URL: "http://127.0.0.1:8080", BIFROST_ENABLED: "1" } as any),
+    resolveRelayRoutingBackend({
+      BIFROST_BASE_URL: "http://127.0.0.1:8080",
+      BIFROST_ENABLED: "1",
+    } as any),
     "auto"
   );
   assert.equal(resolveRelayRoutingBackend({} as any), "ts");
@@ -75,20 +81,23 @@ test("bifrostRouting: shouldTryBifrostForRequest evaluates sidecar eligibility",
   };
 
   // When backend is ts
-  assert.deepEqual(shouldTryBifrostForRequest("ts", cfg, { model: "gpt-4" }), { tryBifrost: false });
+  assert.deepEqual(shouldTryBifrostForRequest("ts", cfg, { model: "gpt-4" }), {
+    tryBifrost: false,
+  });
 
   // When backend is forced bifrost
-  assert.deepEqual(shouldTryBifrostForRequest("bifrost", cfg, { model: "gpt-4" }), { tryBifrost: true });
+  assert.deepEqual(shouldTryBifrostForRequest("bifrost", cfg, { model: "gpt-4" }), {
+    tryBifrost: true,
+  });
 
   // When backend is auto with sidecar lookup
   const lookupEligible = () => ({ eligible: true, reasons: [] });
   const lookupIneligible = () => ({ eligible: false, reasons: ["unsupported"] });
   const lookupUnknown = () => null;
 
-  assert.deepEqual(
-    shouldTryBifrostForRequest("auto", cfg, { model: "gpt-4" }, lookupEligible),
-    { tryBifrost: true }
-  );
+  assert.deepEqual(shouldTryBifrostForRequest("auto", cfg, { model: "gpt-4" }, lookupEligible), {
+    tryBifrost: true,
+  });
   assert.deepEqual(
     shouldTryBifrostForRequest("auto", cfg, { model: "custom-model" }, lookupIneligible),
     { tryBifrost: false, fallbackReason: "bifrost-ineligible" }
@@ -109,7 +118,10 @@ test("bifrostRouting: fallback headers helper parsing", () => {
   assert.equal(getRoutingFallbackHeader("auto", cfg), "bifrost");
   assert.equal(getRoutingFallbackHeader("ts", cfg), undefined);
 
-  assert.equal(getRoutingFallbackReasonHeader("bifrost-cooldown; remaining=1200"), "bifrost-cooldown");
+  assert.equal(
+    getRoutingFallbackReasonHeader("bifrost-cooldown; remaining=1200"),
+    "bifrost-cooldown"
+  );
   assert.equal(getRoutingFallbackReasonHeader("bifrost-error"), "bifrost-error");
   assert.equal(getRoutingFallbackReasonHeader("unknown-reason"), undefined);
 });
