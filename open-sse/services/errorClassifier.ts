@@ -256,7 +256,7 @@ export function classifyProviderError(
   const oauthInvalid = isOAuthInvalidToken(bodyStr);
   const preserveQuota429 = shouldPreserveQuotaSignalsFor429(provider);
 
-  if ((creditsExhausted || subscriptionQuotaExhausted) && [400, 402, 403].includes(statusCode)) {
+  if ((creditsExhausted || subscriptionQuotaExhausted) && [400, 401, 402, 403].includes(statusCode)) {
     return PROVIDER_ERROR_TYPES.QUOTA_EXHAUSTED;
   }
 
@@ -392,7 +392,7 @@ export function classifyProviderError(
       return null;
     }
     // No-credential ("authType: none") providers — free, stateless per-request
-    // token proxies like mimocode/theoldllm — have no real account/credential
+    // token proxies — have no real account/credential
     // to revoke. An unrecognized 403 from these is a transient upstream
     // rate-limit/blocklist signal, not an account ban: keep it recoverable so
     // the connection cooldown/retry layer handles it instead of a permanent
