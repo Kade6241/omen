@@ -554,6 +554,7 @@ export async function handleChatCore({
   // applied to a CLONE of `body` at the persistAttemptLogs sink (surface 1) —
   // the model-bound `body` itself is never touched.
   videoBridgeLog = undefined,
+  fallbackAttempts = 0,
 }) {
   let { provider, model, extendedContext } = modelInfo;
   // #12150 P1b: true iff the video-bridge guardrail rendered >=1 transcript
@@ -5419,6 +5420,7 @@ export async function handleChatCore({
       requestId: skillRequestId,
       compressionResponseMeta,
       comboStrategy,
+      fallbackAttempts,
     });
     // #6426: align response body `model` with the `X-OmniRoute-Model` header
     // (both must be the resolved backend model). Some upstreams (notably legacy
@@ -5569,6 +5571,7 @@ export async function handleChatCore({
     pendingRequestId,
     compressionResponseMeta,
     comboStrategy,
+    fallbackAttempts,
   });
 
   // The streaming headers (turn-state included, when present) are committed to
