@@ -117,6 +117,7 @@ export type ToolLoopApplyResult =
       kind: "ok";
       leg: NonStreamingProviderLegResult & { kind: "ok" };
       usage: ProviderLegUsage | null;
+      loop: ServerOwnedToolLoopResult;
     }
   | { kind: "error"; loop: ServerOwnedToolLoopResult };
 
@@ -130,7 +131,7 @@ export async function applyServerOwnedToolLoopIfNeeded(input: {
   skillsModelId: string;
   executionContext: ExecutionContext;
   abortSignal?: AbortSignal;
-  expectedConnectionId: string;
+  expectedConnectionId?: string;
   followUpLeg: (nextSourceBody: Record<string, unknown>) => Promise<NonStreamingProviderLegResult>;
   logReceipt: (receipt: ServerOwnedToolLoopResult["receipts"][number]) => void;
   executeServerOwned?: (
@@ -167,6 +168,7 @@ export async function applyServerOwnedToolLoopIfNeeded(input: {
     kind: "ok",
     leg: mergeLoopIntoOkLeg(input.initialLeg, loop),
     usage: loop.cumulativeUsage,
+    loop,
   };
 }
 

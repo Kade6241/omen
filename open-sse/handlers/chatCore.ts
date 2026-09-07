@@ -8,7 +8,11 @@ import {
 } from "./chatCore/memorySkillsInjection.ts";
 import { resolveChatCoreRequestSetup } from "./chatCore/requestSetup.ts";
 import { normalizeOpenAICompatibleTools } from "./chatCore/openAICompatibleTools.ts";
-import { buildFailureUsageRecord, projectFailureUsageErrorCode } from "./chatCore/failureUsage.ts";
+import {
+  buildFailureUsageRecord,
+  projectFailureUsageErrorCode,
+  type FailureUsageAggregate,
+} from "./chatCore/failureUsage.ts";
 import { createTranslationFailureResult } from "./chatCore/translationFailure.ts";
 import { estimateFinalInputTokens } from "./chatCore/contextEstimation.ts";
 import {
@@ -107,11 +111,13 @@ import {
 import { recoverAnthropicThinkingSignature } from "./chatCore/thinkingSignatureRecovery.ts";
 import { runProviderExecutionPipeline } from "./chatCore/providerExecutionPipeline.ts";
 import { runNonStreamingProviderLeg } from "./chatCore/nonStreamingProviderLeg.ts";
+import type { ChatCoreErrorResult } from "@/lib/skills/toolLoopTypes.ts";
 import {
   applyServerOwnedToolLoopIfNeeded,
   derivePostInjectionRequestIdentity,
   followUpLegInput,
 } from "./chatCore/serverOwnedToolLoopWire.ts";
+import { finalizeToolLoopError } from "./chatCore/nonStreamingFinalization.ts";
 import { markCodexScopeRateLimited } from "./chatCore/codexFailover.ts";
 import { deleteSessionAccountAffinity } from "@/lib/db/sessionAccountAffinity";
 import {
@@ -681,13 +687,7 @@ export async function handleChatCore({
   const persistFailureUsage = (
     statusCode: number,
     errorCode?: string | null,
-    aggregate?: {
-      prompt_tokens?: number;
-      completion_tokens?: number;
-      cache_read_input_tokens?: number;
-      cache_creation_input_tokens?: number;
-      reasoning_tokens?: number;
-    } | null
+    aggregate?: FailureUsageAggregate | null
   ) => {
     saveRequestUsage(
       buildFailureUsageRecord({
@@ -4929,7 +4929,9 @@ export async function handleChatCore({
     }
 
     pipelineRecovered = true;
-    const expectedConn = String(getCurrentConnectionId() || connectionId || "");
+    const expectedConn = managedLease
+      ? String(getCurrentConnectionId() || connectionId || "") || undefined
+      : undefined;
     const loopApply = await applyServerOwnedToolLoopIfNeeded({
       enabled: isServerOwnedToolLoopEnabled(),
       stream,
@@ -4997,7 +4999,7 @@ export async function handleChatCore({
               clientResponseFormat,
               provider,
               model: effectiveModel,
-              connectionId: expectedConn,
+              connectionId: String(getCurrentConnectionId() || connectionId || ""),
               getCurrentConnectionId: () => getCurrentConnectionId() || undefined,
               effectiveModel: currentModel,
               translatedBody: translatedBody as Record<string, unknown>,
@@ -5016,17 +5018,16 @@ export async function handleChatCore({
       logReceipt: (receipt) => reqLogger.logToolLoopReceipt(receipt),
     });
     if (loopApply.kind === "error") {
-      const err = loopApply.loop.errorResult!;
-      persistFailureUsage(err.status, err.errorCode || `upstream_${err.status}`, loopApply.loop.cumulativeUsage);
-      persistAttemptLogs({
-        status: err.status,
-        error: err.error || "Provider request failed",
+      return await finalizeToolLoopError({
+        loop: loopApply.loop,
+        model,
+        provider,
+        connectionId,
         providerRequest: loopApply.loop.finalProviderRequest || finalBody || translatedBody,
-        clientResponse: buildErrorBody(err.status, err.error || "Provider request failed"),
-        cacheSource: "upstream",
+        persistFailureUsage,
+        persistAttemptLogs,
+        trackPendingRequest,
       });
-      trackPendingRequest(model, provider, connectionId, false);
-      return err;
     }
     if (loopApply.kind === "ok") {
       toolLoopRan = true;

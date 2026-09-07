@@ -43,27 +43,7 @@ function projectSkillResultForPublicResponse(result: unknown): unknown {
   return projectSkillOutputForBoundary(result as Record<string, unknown>);
 }
 
-interface ToolCall {
-  id: string;
-  name: string;
-  arguments: Record<string, unknown>;
-}
-
-interface ExecutionContext {
-  apiKeyId: string;
-  sessionId: string;
-  requestId: string;
-  builtinToolNames?: string[];
-  injectedCustomSkillNames?: string[];
-  customSkillExecutionEnabled?: boolean;
-  requestIdentity?: string;
-  executionFenceEnabled?: boolean;
-  // #7339: threaded through to the web_fetch builtin so it can resolve a per-model
-  // pinned fetch backend (interceptionRules.fetchBackend). Optional — every other
-  // builtin/skill ignores these.
-  provider?: string;
-  model?: string;
-}
+// ToolCall and ExecutionContext types are imported from ./toolLoopTypes.ts
 
 const BUILTIN_TOOL_ALIASES: Record<string, string> = {
   [OMNIROUTE_WEB_SEARCH_FALLBACK_TOOL_NAME]: "web_search",

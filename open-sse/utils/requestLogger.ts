@@ -293,7 +293,8 @@ function compactPipelinePayloads(
       continue;
     }
 
-    (result as Record<string, unknown>)[key] = value;
+    const payloadKey = key as Exclude<keyof RequestPipelinePayloads, "streamChunks" | "toolLoop">;
+    result[payloadKey] = value as JsonRecord;
   }
 
   return hasOwnValues(result) ? result : null;

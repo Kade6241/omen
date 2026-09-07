@@ -225,3 +225,22 @@ test("derivePostInjectionRequestIdentity uses the client idempotency header", ()
   assert.equal(a, b);
   assert.notEqual(a, c);
 });
+
+test("applyServerOwnedToolLoopIfNeeded accepts undefined expectedConnectionId for unmanaged leases", async () => {
+  const result = await applyServerOwnedToolLoopIfNeeded({
+    enabled: false,
+    stream: false,
+    isResponsesEndpoint: false,
+    sourceFormat: FORMATS.OPENAI,
+    initialLeg: okLeg(),
+    sourceBody: { model: "gpt-4o", messages: [] },
+    skillsModelId: "openai",
+    executionContext: { apiKeyId: "k", sessionId: "s", requestId: "r" },
+    expectedConnectionId: undefined,
+    followUpLeg: async () => {
+      throw new Error("must not resume");
+    },
+    logReceipt: () => {},
+  });
+  assert.equal(result.kind, "skip");
+});

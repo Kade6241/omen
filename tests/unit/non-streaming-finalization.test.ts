@@ -10,6 +10,7 @@ import type {
 import {
   buildNonStreamingFinalizationPlan,
   finalizeNonStreamingRequest,
+  finalizeToolLoopError,
   type NonStreamingFinalizationDeps,
 } from "../../open-sse/handlers/chatCore/nonStreamingFinalization.ts";
 
@@ -169,4 +170,50 @@ test("success finalizer writes usage/cost/quota/attempt/pending once", async () 
   assert.equal(deps.calls.scheduleQuota, 1);
   assert.equal(deps.calls.writeAttempt, 1);
   assert.equal(deps.calls.finalizePending, 1);
+});
+
+test("finalizeToolLoopError delegates through finalization plan and deps", async () => {
+  const loop: ServerOwnedToolLoopResult = {
+    kind: "error",
+    errorResult: errorResult(),
+    cumulativeUsage: usage(),
+    totalCostUsd: 0.05,
+    receipts: [receipt(0), receipt(1, { httpStatus: 429 })],
+    followUps: 1,
+    termination: "provider_error",
+  };
+  let usageSaved = false;
+  let attemptLogged = false;
+  let pendingTracked = false;
+
+  const res = await finalizeToolLoopError({
+    loop,
+    model: "gpt-4o",
+    provider: "openai",
+    connectionId: "conn-1",
+    providerRequest: { messages: [] },
+    persistFailureUsage: (status, code, u) => {
+      assert.equal(status, 429);
+      assert.equal(code, "rate_limited");
+      assert.equal(u?.prompt_tokens, 100);
+      assert.equal(u?.completion_tokens, 20);
+      assert.equal(u?.cache_read_input_tokens, 10);
+      assert.equal(u?.reasoning_tokens, 5);
+      usageSaved = true;
+    },
+    persistAttemptLogs: (params) => {
+      assert.equal(params.status, 429);
+      attemptLogged = true;
+    },
+    trackPendingRequest: (m, p, conn, pending) => {
+      assert.equal(m, "gpt-4o");
+      assert.equal(pending, false);
+      pendingTracked = true;
+    },
+  });
+
+  assert.equal(res.status, 429);
+  assert.equal(usageSaved, true);
+  assert.equal(attemptLogged, true);
+  assert.equal(pendingTracked, true);
 });

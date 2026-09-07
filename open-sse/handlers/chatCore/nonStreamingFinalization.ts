@@ -8,6 +8,8 @@ import type {
   ProviderLegUsage,
   ServerOwnedToolLoopResult,
 } from "@/lib/skills/toolLoopTypes.ts";
+import type { PersistAttemptLogsArgs } from "./attemptLogging.ts";
+import { type FailureUsageAggregate, toFailureUsageAggregate } from "./failureUsage.ts";
 
 export type NonStreamingFinalizationPlan =
   | {
@@ -76,4 +78,56 @@ export async function finalizeNonStreamingRequest(
   }
   deps.writeAttempt(plan);
   deps.finalizePending(plan);
+}
+
+export async function finalizeToolLoopError(input: {
+  loop: ServerOwnedToolLoopResult;
+  model: string;
+  provider: string;
+  connectionId?: string;
+  providerRequest?: Record<string, unknown>;
+  persistFailureUsage: (
+    status: number,
+    errorCode: string,
+    usage?: FailureUsageAggregate | null
+  ) => void;
+  persistAttemptLogs: (params: PersistAttemptLogsArgs) => void;
+  trackPendingRequest: (
+    model: string,
+    provider: string,
+    connectionId?: string,
+    isPending?: boolean
+  ) => void;
+}): Promise<ChatCoreErrorResult> {
+  const plan = buildNonStreamingFinalizationPlan(input.loop);
+  const err = plan.kind === "failure" ? plan.error : missingError();
+  await finalizeNonStreamingRequest(plan, {
+    writeUsage: () => {
+      input.persistFailureUsage(
+        err.status,
+        err.errorCode || `upstream_${err.status}`,
+        toFailureUsageAggregate(plan.usage)
+      );
+    },
+    writeCost: () => {},
+    scheduleQuota: () => {},
+    writeAttempt: () => {
+      input.persistAttemptLogs({
+        status: err.status,
+        error: err.error || "Provider request failed",
+        providerRequest: input.providerRequest,
+        clientResponse: {
+          error: {
+            message: err.error || "Provider request failed",
+            type: err.errorType || "api_error",
+          },
+        },
+        cacheSource: "upstream",
+      });
+    },
+    finalizePending: () => {
+      input.trackPendingRequest(input.model, input.provider, input.connectionId, false);
+    },
+  });
+  return err;
 }

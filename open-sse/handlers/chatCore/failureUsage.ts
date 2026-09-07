@@ -23,6 +23,36 @@ export function projectFailureUsageErrorCode(opts: {
   return errorBody.error.code || String(opts.statusCode);
 }
 
+export interface FailureUsageAggregate {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
+  reasoning_tokens?: number;
+}
+
+export function toFailureUsageAggregate(
+  usage:
+    | {
+        prompt_tokens?: number;
+        completion_tokens?: number;
+        cache_read_input_tokens?: number;
+        cache_creation_input_tokens?: number;
+        reasoning_tokens?: number;
+      }
+    | null
+    | undefined
+): FailureUsageAggregate | undefined {
+  if (!usage) return undefined;
+  return {
+    prompt_tokens: usage.prompt_tokens,
+    completion_tokens: usage.completion_tokens,
+    cache_read_input_tokens: usage.cache_read_input_tokens,
+    cache_creation_input_tokens: usage.cache_creation_input_tokens,
+    reasoning_tokens: usage.reasoning_tokens,
+  };
+}
+
 export function buildFailureUsageRecord(opts: {
   provider: string | null | undefined;
   model: string | null | undefined;
@@ -35,13 +65,7 @@ export function buildFailureUsageRecord(opts: {
   errorCode: string | null | undefined;
   latencyMs: number;
   endpoint?: string | null | undefined;
-  aggregate?: {
-    prompt_tokens?: number;
-    completion_tokens?: number;
-    cache_read_input_tokens?: number;
-    cache_creation_input_tokens?: number;
-    reasoning_tokens?: number;
-  } | null;
+  aggregate?: FailureUsageAggregate | null;
 }) {
   return {
     provider: opts.provider || "unknown",
