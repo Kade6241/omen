@@ -29,6 +29,7 @@ import {
   extractChatcmplId,
 } from "./accountRotation.ts";
 import { isOpencodeGeoBlocked, proxyKeyOf } from "./opencodeGeoBlock.ts";
+import { isRetriableUpstreamFailure } from "./opencodeTransientFailure.ts";
 import { isNetworkRotationSharedEgressGuardEnabled } from "@/shared/utils/featureFlags";
 
 /**
@@ -567,8 +568,9 @@ export class OpencodeExecutor extends BaseExecutor {
       // through the accounts is the retry). Avoids an unbounded loop on a
       // persistently malformed upstream.
       const emptyRejectionBudget = this.accounts.length === 1 ? 1 : 0;
-      // 403-geo tried set: proxy keys already proven geo-blocked for this
-      // request's model. Request-local only — nothing persists past execute().
+      // Tried set: proxy keys already proven unusable for this request's
+      // model (geo-blocked, or transient 5xx). Request-local only — nothing
+      // persists past execute().
       const geoTriedProxyKeys = new Set<string>();
       let directTried = false;
 
@@ -594,15 +596,19 @@ export class OpencodeExecutor extends BaseExecutor {
         }
         const lastStatus = lastResult !== null ? lastResult.response.status : null;
         const lastWasGeo = lastStatus === 403 || lastStatus === 451;
+        const lastWasTransient = lastStatus !== null && lastStatus >= 500 && lastStatus < 600;
+        const isMonoRetryOwed = this.accounts.length === 1 && lastWasTransient;
         if (
+          !isMonoRetryOwed &&
           lastResult !== null &&
           geoTriedProxyKeys.size > 0 &&
           !isProxiedCandidate(account) &&
           !(account.proxy === null && !directTried)
         ) {
           // Geo exhaustion (last was 403/451) → surface as-is, no success mark.
+          // Transient exhaustion (last was 5xx) → same: surface last as-is.
           // Any other last status (e.g. 429 after 403s) → skip without a call.
-          if (lastWasGeo) break;
+          if (lastWasGeo || lastWasTransient) break;
           continue;
         }
         // Commit the last-resort direct attempt so a later exclusion breaks
@@ -683,6 +689,24 @@ export class OpencodeExecutor extends BaseExecutor {
           continue;
         }
 
+        if (isRetriableUpstreamFailure(status)) {
+          const key = proxyKeyOf(account.proxy);
+          if (key !== null) geoTriedProxyKeys.add(key);
+          else directTried = true;
+          log?.warn?.(
+            "OPENCODE",
+            `transient upstream ${status} on account ${masked} (proxy ${key ?? "direct"}), rotating to next…`
+          );
+          // Deliberately a separate branch from the 400-empty arm below,
+          // not one merged `if`: this arm never touches the body, the 400
+          // arm must clone-read it. Both share the predicate + tried-set.
+          // Single proxied account: one retry via the existing budget (a
+          // proxy-less single account takes the fast path, never the loop).
+          // Transient is not deterministic like geo: upstream may recover.
+          // No 0-retry guard here (it stays geo-only).
+          continue;
+        }
+
         if (status === 403 || status === 451) {
           let bodyText: string | null = null;
           try {
@@ -719,7 +743,7 @@ export class OpencodeExecutor extends BaseExecutor {
           } catch {
             log?.debug?.("OPENCODE", "body read failed on empty rejection check");
           }
-          if (bodyText !== null && isEmptyUpstreamRejection(400, bodyText)) {
+          if (bodyText !== null && isRetriableUpstreamFailure(400, bodyText)) {
             const chatcmplId = extractChatcmplId(bodyText);
             log?.warn?.(
               "OPENCODE",
