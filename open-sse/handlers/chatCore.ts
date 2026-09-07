@@ -107,6 +107,11 @@ import {
 import { recoverAnthropicThinkingSignature } from "./chatCore/thinkingSignatureRecovery.ts";
 import { runProviderExecutionPipeline } from "./chatCore/providerExecutionPipeline.ts";
 import { runNonStreamingProviderLeg } from "./chatCore/nonStreamingProviderLeg.ts";
+import {
+  applyServerOwnedToolLoopIfNeeded,
+  derivePostInjectionRequestIdentity,
+  followUpLegInput,
+} from "./chatCore/serverOwnedToolLoopWire.ts";
 import { markCodexScopeRateLimited } from "./chatCore/codexFailover.ts";
 import { deleteSessionAccountAffinity } from "@/lib/db/sessionAccountAffinity";
 import {
@@ -206,6 +211,7 @@ import {
 import {
   areContextWindowChecksDisabled,
   isFeatureFlagEnabled,
+  isServerOwnedToolLoopEnabled,
 } from "@/shared/utils/featureFlags.ts";
 import { resolveNoAuthEchoModel } from "./chatCore/noAuthEchoModel.ts";
 import {
@@ -672,7 +678,17 @@ export async function handleChatCore({
   ): EffectiveServiceTier | null => resolveReportedServiceTierFor(provider, payload, maxDepth);
   // Failure usage record building extracted to chatCore/failureUsage.ts (#3501); the handler keeps
   // the fire-and-forget save + computes latencyMs, so the call sites stay byte-identical.
-  const persistFailureUsage = (statusCode: number, errorCode?: string | null) => {
+  const persistFailureUsage = (
+    statusCode: number,
+    errorCode?: string | null,
+    aggregate?: {
+      prompt_tokens?: number;
+      completion_tokens?: number;
+      cache_read_input_tokens?: number;
+      cache_creation_input_tokens?: number;
+      reasoning_tokens?: number;
+    } | null
+  ) => {
     saveRequestUsage(
       buildFailureUsageRecord({
         provider,
@@ -686,6 +702,7 @@ export async function handleChatCore({
         errorCode,
         latencyMs: Date.now() - startTime,
         endpoint: endpointPath,
+        aggregate: aggregate ?? undefined,
       })
     ).catch(() => {});
   };
@@ -4741,17 +4758,7 @@ export async function handleChatCore({
   // Non-streaming response
   if (!stream) {
     try {
-    const legResult = await runNonStreamingProviderLeg({
-      phase: "initial",
-      sourceBody: (body || {}) as Record<string, unknown>,
-      expectedConnectionId: managedLease
-        ? String(getCurrentConnectionId() || connectionId || "") || undefined
-        : undefined,
-      allowAccountRotation: !managedLease && comboStrategy !== "context-relay",
-      allowModelFallback: true,
-      executeProviderRequest: (modelToCall, allowDedup) =>
-        executeProviderRequest(modelToCall, allowDedup),
-      runProviderExecution: async ({ policy, model: pipelineModel, translatedBody: wireBody }) => {
+    const runNonStreamingPipeline = async ({ policy, model: pipelineModel, translatedBody: wireBody }) => {
         translatedBody = wireBody as typeof translatedBody;
         currentModel = pipelineModel;
         triedModels.add(pipelineModel);
@@ -4845,7 +4852,21 @@ export async function handleChatCore({
           sendProviderAttempt: (modelToCall, allowDedup) =>
             executeProviderRequest(modelToCall, allowDedup),
         });
-      },
+    };
+
+    let toolLoopRan = false;
+    let toolLoopUsage = null;
+    let legResult = await runNonStreamingProviderLeg({
+      phase: "initial",
+      sourceBody: (body || {}) as Record<string, unknown>,
+      expectedConnectionId: managedLease
+        ? String(getCurrentConnectionId() || connectionId || "") || undefined
+        : undefined,
+      allowAccountRotation: !managedLease && comboStrategy !== "context-relay",
+      allowModelFallback: true,
+      executeProviderRequest: (modelToCall, allowDedup) =>
+        executeProviderRequest(modelToCall, allowDedup),
+      runProviderExecution: runNonStreamingPipeline,
       setRequestWireState: ({ translatedBody: nextBody, effectiveModel: nextModel }) => {
         translatedBody = nextBody as typeof translatedBody;
         currentModel = nextModel;
@@ -4908,6 +4929,111 @@ export async function handleChatCore({
     }
 
     pipelineRecovered = true;
+    const expectedConn = String(getCurrentConnectionId() || connectionId || "");
+    const loopApply = await applyServerOwnedToolLoopIfNeeded({
+      enabled: isServerOwnedToolLoopEnabled(),
+      stream,
+      isResponsesEndpoint,
+      sourceFormat,
+      initialLeg: legResult,
+      sourceBody: (body || {}) as Record<string, unknown>,
+      skillsModelId: getSkillsModelIdForFormat(sourceFormat),
+      executionContext: {
+        apiKeyId: memoryOwnerId || "local",
+        sessionId: pipelineSessionId,
+        requestId: skillRequestId,
+        requestIdentity: derivePostInjectionRequestIdentity({
+          apiKeyId: memoryOwnerId || "local",
+          headers: clientRawRequest?.headers ?? null,
+          skillRequestId,
+          postInjectionBody: (body || {}) as Record<string, unknown>,
+        }),
+        builtinToolNames: injectionResult.builtinToolNames,
+        injectedCustomSkillNames: injectionResult.injectedCustomSkillNames,
+        customSkillExecutionEnabled:
+          Boolean(memoryOwnerId) && memorySettings?.skillsEnabled === true,
+        executionFenceEnabled: true,
+        provider,
+        model: effectiveModel,
+      },
+      abortSignal: clientRawRequest?.signal,
+      expectedConnectionId: expectedConn,
+      followUpLeg: async (nextSourceBody) => {
+        translatedBody = translateRequest(
+          sourceFormat,
+          targetFormat,
+          model,
+          { ...nextSourceBody },
+          false,
+          credentials,
+          provider,
+          reqLogger,
+          {
+            normalizeToolCallId: getModelNormalizeToolCallId(provider || "", model || "", sourceFormat),
+            preserveDeveloperRole: getModelPreserveOpenAIDeveloperRole(
+              provider || "",
+              model || "",
+              sourceFormat
+            ),
+            preserveCacheControl,
+            signatureNamespace: connectionId,
+            copilotClient: copilotCompatibleReasoning,
+            reasoningCacheScope,
+          }
+        );
+        return runNonStreamingProviderLeg(
+          followUpLegInput(
+            {
+              executeProviderRequest: (modelToCall, allowDedup) =>
+                executeProviderRequest(modelToCall, allowDedup),
+              runProviderExecution: runNonStreamingPipeline,
+              setRequestWireState: ({ translatedBody: nextBody, effectiveModel: nextModel }) => {
+                translatedBody = nextBody as typeof translatedBody;
+                currentModel = nextModel;
+                triedModels.add(nextModel);
+              },
+              sourceFormat,
+              targetFormat,
+              clientResponseFormat,
+              provider,
+              model: effectiveModel,
+              connectionId: expectedConn,
+              getCurrentConnectionId: () => getCurrentConnectionId() || undefined,
+              effectiveModel: currentModel,
+              translatedBody: translatedBody as Record<string, unknown>,
+              toolNameMap,
+              requestToolIdentityMap,
+              reasoningCacheScope,
+              clientHeaders: clientRawRequest?.headers ?? null,
+              isClaudeCodeCompatible,
+              log,
+            },
+            nextSourceBody,
+            expectedConn
+          )
+        );
+      },
+      logReceipt: (receipt) => reqLogger.logToolLoopReceipt(receipt),
+    });
+    if (loopApply.kind === "error") {
+      const err = loopApply.loop.errorResult!;
+      persistFailureUsage(err.status, err.errorCode || `upstream_${err.status}`, loopApply.loop.cumulativeUsage);
+      persistAttemptLogs({
+        status: err.status,
+        error: err.error || "Provider request failed",
+        providerRequest: loopApply.loop.finalProviderRequest || finalBody || translatedBody,
+        clientResponse: buildErrorBody(err.status, err.error || "Provider request failed"),
+        cacheSource: "upstream",
+      });
+      trackPendingRequest(model, provider, connectionId, false);
+      return err;
+    }
+    if (loopApply.kind === "ok") {
+      toolLoopRan = true;
+      toolLoopUsage = loopApply.usage;
+      legResult = loopApply.leg;
+    }
+
     if (legResult.upstreamResponse) {
       providerResponse = legResult.upstreamResponse;
       providerHeaders = normalizeHeaders(legResult.upstreamResponse.headers);
@@ -4949,7 +5075,7 @@ export async function handleChatCore({
       providerSpecificData: credentials?.providerSpecificData,
       log,
     });
-    const usage = extractUsageFromResponse(responseBody, provider);
+    const usage = toolLoopUsage ?? extractUsageFromResponse(responseBody, provider);
     const cacheUsageLogMeta = buildCacheUsageLogMeta(usage);
     if (usage && typeof usage === "object") {
       attachCompressionUsageReceiptAfterAnalytics(usage as Record<string, unknown>, "provider");
@@ -5012,7 +5138,7 @@ export async function handleChatCore({
       webFetchFallbackPlan.toolName,
       ...(memoryOwnerId && memorySettings?.enabled ? MEMORY_BUILTIN_TOOL_NAMES : []),
     ].filter((name): name is string => Boolean(name));
-    if (customSkillExecutionEnabled || builtinToolNames.length > 0) {
+    if (!toolLoopRan && (customSkillExecutionEnabled || builtinToolNames.length > 0)) {
       const skillSessionId = pipelineSessionId;
 
       translatedResponse = await handleToolCallExecution(

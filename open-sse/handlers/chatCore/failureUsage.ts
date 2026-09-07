@@ -35,11 +35,24 @@ export function buildFailureUsageRecord(opts: {
   errorCode: string | null | undefined;
   latencyMs: number;
   endpoint?: string | null | undefined;
+  aggregate?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    cache_read_input_tokens?: number;
+    cache_creation_input_tokens?: number;
+    reasoning_tokens?: number;
+  } | null;
 }) {
   return {
     provider: opts.provider || "unknown",
     model: opts.model || "unknown",
-    tokens: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0, reasoning: 0 },
+    tokens: {
+      input: opts.aggregate?.prompt_tokens ?? 0,
+      output: opts.aggregate?.completion_tokens ?? 0,
+      cacheRead: opts.aggregate?.cache_read_input_tokens ?? 0,
+      cacheCreation: opts.aggregate?.cache_creation_input_tokens ?? 0,
+      reasoning: opts.aggregate?.reasoning_tokens ?? 0,
+    },
     status: String(opts.statusCode),
     success: false,
     latencyMs: opts.latencyMs,

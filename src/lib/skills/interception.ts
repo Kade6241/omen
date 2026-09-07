@@ -7,7 +7,7 @@ import { OMNIROUTE_WEB_SEARCH_FALLBACK_TOOL_NAME } from "@omniroute/open-sse/ser
 import { OMNIROUTE_WEB_FETCH_FALLBACK_TOOL_NAME } from "@omniroute/open-sse/services/webFetchInterception.ts";
 import { sanitizeErrorMessage } from "@omniroute/open-sse/utils/errorSanitization.ts";
 import { runWithServerToolFence } from "./toolExecutionFence";
-import type { ExecutedToolResult } from "./toolLoopTypes";
+import type { ExecutedToolResult, ToolCall, ExecutionContext } from "./toolLoopTypes";
 import { logger } from "../../../open-sse/utils/logger.ts";
 
 const log = logger("SKILLS_INTERCEPTION");
