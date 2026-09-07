@@ -464,8 +464,8 @@ function findUnquotedPathEnd(
   let hasFilesystemEvidence = false;
   let hasUnresolvedFragments = false;
 
-  const resolveEndpoint = (): number => {
-    if (hasUnresolvedFragments) {
+  const resolveEndpoint = (ignoreAmbiguity = false): number => {
+    if (hasUnresolvedFragments && !ignoreAmbiguity) {
       return failClosedAmbiguity || hasFilesystemEvidence ? value.length : -1;
     }
     if (resolvedExtensionEnd >= 0) return resolvedExtensionEnd;
@@ -530,7 +530,12 @@ function findUnquotedPathEnd(
     while (nextTokenStart < value.length && isWhitespace(value[nextTokenStart])) nextTokenStart++;
     if (nextTokenStart >= value.length) return resolveEndpoint();
     if (isSyntacticallyAbsolutePathAt(value, nextTokenStart)) {
-      const endpoint = resolveEndpoint();
+      // A route-shielded upcoming span (e.g. "POST /v1/foo") is never
+      // filesystem-sensitive by design — see hasRouteContextBefore. Its mere
+      // presence must not force ambiguous prose in between (like "Use POST")
+      // to fail closed and swallow past it into the shielded route and
+      // beyond; resolve with whatever evidence was already gathered instead.
+      const endpoint = resolveEndpoint(hasRouteContextBefore(value, nextTokenStart));
       if (endpoint >= 0) return endpoint;
       return acceptEndpointBeforeAnotherAbsolute ? lastPathTokenEnd : -1;
     }
