@@ -186,6 +186,79 @@ async function fetchRawApiKey(
   return { apiKey, id, maskedKey: stringField(item?.Key) || null, error: null };
 }
 
+export interface FindTargetConnectionCriteria {
+  targetConnectionId?: string;
+  provider: string;
+  apiKey?: string;
+  apiKeyId?: number | null;
+  defaultName: string;
+}
+
+/**
+ * Pure matcher to find an existing connection to adopt or update during console binding.
+ *
+ * Matching precedence:
+ * 1. targetConnectionId priority match (strictly verified against criteria.provider).
+ * 2. Exact apiKey match, or volcApiKeyId match (numeric and > 0).
+ * 3. Canonical default name match (e.g. 'Volcano Ark Coding Plan').
+ * 4. Intentional fallback: safe adoption for single existing connection under this provider.
+ *    - Design rationale: Operators commonly created custom connections (e.g. named 'main')
+ *      prior to console login. This fallback connects console cookies to that sole instance.
+ *    - Safety boundary: strictly scoped to allConnections.length === 1 so that multiple
+ *      distinct accounts are never silently clobbered.
+ * 5. When multiple connections exist and none match: returns undefined (triggers new connection creation).
+ */
+export function findTargetConnection(
+  allConnections: JsonRecord[],
+  criteria: FindTargetConnectionCriteria
+): JsonRecord | undefined {
+  // 1. targetConnectionId priority match (with provider affinity check)
+  if (criteria.targetConnectionId) {
+    const matched = allConnections.find(
+      (conn) =>
+        stringField(conn.id) === criteria.targetConnectionId &&
+        stringField(conn.provider) === criteria.provider
+    );
+    if (matched) return matched;
+  }
+
+  // 2. Match by valid apiKey or valid volcApiKeyId
+  if (criteria.apiKey) {
+    const matched = allConnections.find(
+      (conn) =>
+        stringField(conn.apiKey) === criteria.apiKey &&
+        stringField(conn.provider) === criteria.provider
+    );
+    if (matched) return matched;
+  }
+  if (typeof criteria.apiKeyId === "number" && criteria.apiKeyId > 0) {
+    const matched = allConnections.find((conn) => {
+      const psd = record(conn.providerSpecificData);
+      return (
+        Number(psd.volcApiKeyId) === criteria.apiKeyId &&
+        stringField(conn.provider) === criteria.provider
+      );
+    });
+    if (matched) return matched;
+  }
+
+  // 3. Match by canonical default name
+  const nameMatched = allConnections.find(
+    (conn) =>
+      stringField(conn.name) === criteria.defaultName &&
+      stringField(conn.provider) === criteria.provider
+  );
+  if (nameMatched) return nameMatched;
+
+  // 4. Safe adoption for single connection scenario under matching provider (e.g. user-named 'main')
+  if (allConnections.length === 1 && stringField(allConnections[0].provider) === criteria.provider) {
+    return allConnections[0];
+  }
+
+  // 5. Multiple connections exist and none matched -> do not clobber; return undefined
+  return undefined;
+}
+
 export async function upsertConnection(
   kind: PlanKind,
   apiKey: string,
@@ -198,37 +271,13 @@ export async function upsertConnection(
   const cfg = PLAN_CONFIG[kind];
   const allConnections = (await getProviderConnections({ provider: cfg.provider })) as JsonRecord[];
 
-  let matched: JsonRecord | undefined;
-
-  // 1. targetConnectionId priority match (with provider affinity check)
-  if (targetConnectionId) {
-    matched = allConnections.find(
-      (conn) => stringField(conn.id) === targetConnectionId && stringField(conn.provider) === cfg.provider
-    );
-  }
-
-  // 2. Match by valid apiKey or valid volcApiKeyId
-  if (!matched && apiKey) {
-    matched = allConnections.find((conn) => stringField(conn.apiKey) === apiKey);
-  }
-  if (!matched && typeof apiKeyId === "number" && apiKeyId > 0) {
-    matched = allConnections.find((conn) => {
-      const psd = record(conn.providerSpecificData);
-      return Number(psd.volcApiKeyId) === apiKeyId;
-    });
-  }
-
-  // 3. Match by canonical default name
-  if (!matched) {
-    matched = allConnections.find((conn) => stringField(conn.name) === cfg.name);
-  }
-
-  // 4. Safe adoption for single connection scenario (e.g. user-named 'main')
-  if (!matched && allConnections.length === 1) {
-    matched = allConnections[0];
-  }
-
-  // 5. If multiple connections exist and none matched, do NOT clobber; fall through to create new connection.
+  const matched = findTargetConnection(allConnections, {
+    targetConnectionId,
+    provider: cfg.provider,
+    apiKey,
+    apiKeyId,
+    defaultName: cfg.name,
+  });
 
   const existingPsd = matched ? record(matched.providerSpecificData) : {};
   const providerSpecificData = {
@@ -329,5 +378,6 @@ export async function bindVolcenginePlansFromConsoleCredentials(
 }
 
 export const __testing = {
+  findTargetConnection,
   upsertConnection,
 };

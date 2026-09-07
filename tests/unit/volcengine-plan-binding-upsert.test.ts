@@ -129,3 +129,75 @@ test("volcenginePlanBinding upsert rules with SQLite temp isolation", async (t) 
   assert.notEqual(agentUpsertResult.id, conn1.id);
   assert.equal(agentUpsertResult.id, agentConn.id, "Matched the single agent connection instead");
 });
+
+test("findTargetConnection pure matching logic and single-connection adoption intent", () => {
+  const criteria = {
+    provider: "volcengine-coding-plan",
+    defaultName: "Volcano Ark Coding Plan",
+    apiKey: "ark-key-match",
+  };
+
+  // 1. targetConnectionId priority match (strictly same provider)
+  const list1 = [
+    { id: "c1", provider: "volcengine-coding-plan", name: "any" },
+    { id: "c2", provider: "volcengine-coding-plan", name: "other" },
+  ];
+  assert.equal(
+    bindingTesting.findTargetConnection(list1, { ...criteria, targetConnectionId: "c2" })?.id,
+    "c2"
+  );
+  // targetConnectionId with mismatched provider does not match
+  assert.equal(
+    bindingTesting.findTargetConnection(
+      [{ id: "c-other", provider: "different-provider", name: "any" }],
+      { ...criteria, targetConnectionId: "c-other" }
+    ),
+    undefined
+  );
+
+  // 2. ApiKey match
+  const list2 = [
+    { id: "c1", provider: "volcengine-coding-plan", apiKey: "ark-key-match" },
+    { id: "c2", provider: "volcengine-coding-plan", apiKey: "ark-diff-key" },
+  ];
+  assert.equal(bindingTesting.findTargetConnection(list2, criteria)?.id, "c1");
+
+  // 3. VolcApiKeyId match
+  const list3 = [
+    { id: "c1", provider: "volcengine-coding-plan", providerSpecificData: { volcApiKeyId: 777 } },
+    { id: "c2", provider: "volcengine-coding-plan", providerSpecificData: { volcApiKeyId: 888 } },
+  ];
+  assert.equal(
+    bindingTesting.findTargetConnection(list3, { ...criteria, apiKey: undefined, apiKeyId: 888 })?.id,
+    "c2"
+  );
+
+  // 4. Default name match
+  const list4 = [
+    { id: "c1", provider: "volcengine-coding-plan", name: "custom-name" },
+    { id: "c2", provider: "volcengine-coding-plan", name: "Volcano Ark Coding Plan" },
+  ];
+  assert.equal(
+    bindingTesting.findTargetConnection(list4, { ...criteria, apiKey: undefined })?.id,
+    "c2"
+  );
+
+  // 5. Intentional fallback: single existing connection adoption
+  const list5 = [{ id: "c-single", provider: "volcengine-coding-plan", name: "main" }];
+  assert.equal(
+    bindingTesting.findTargetConnection(list5, { ...criteria, apiKey: undefined })?.id,
+    "c-single",
+    "Adopts sole existing connection for provider"
+  );
+
+  // 6. Multiple connections without match -> undefined (new connection will be created)
+  const list6 = [
+    { id: "c1", provider: "volcengine-coding-plan", name: "account-a" },
+    { id: "c2", provider: "volcengine-coding-plan", name: "account-b" },
+  ];
+  assert.equal(
+    bindingTesting.findTargetConnection(list6, { ...criteria, apiKey: undefined }),
+    undefined,
+    "Does not clobber when multiple connections exist"
+  );
+});
