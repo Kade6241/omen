@@ -79,6 +79,7 @@ import {
 import { dispatchChatWithAffinityEviction } from "./chatDispatch";
 import { getCachedSettings, getCombosCacheVersion } from "@/lib/db/readCache";
 import { comboCheckProvider, ghComboGate } from "./chat/githubLiveCatalogFilter.ts";
+import { comboTargetPassesKeyModelPolicy } from "./chat/comboTargetKeyPolicy.ts";
 import { getCombos } from "@/lib/db/combos";
 import { resolveModelLockoutSettings } from "@/lib/resilience/modelLockoutSettings";
 import {
@@ -1006,19 +1007,10 @@ async function handleChatImplementation(
       }
     ) => {
       if (isComboLiveTest) return true;
-
-      // #9057: for keys with model restrictions (allowedModels or disableNonPublicModels),
-      // run isModelAllowedForKey even for auto/* models. The API-key policy gate
-      // (validateModelAccess in apiKeyPolicy.ts) treats auto/* as a virtual combo and
-      // skips isModelAllowedForKey, so the per-candidate check here is the only
-      // enforcement point during combo routing. Without it, a key with
-      // disableNonPublicModels=true can reach free/prohibited models through auto/*.
-      const hasModelRestrictions =
-        apiKeyInfo &&
-        (Boolean(apiKeyInfo.allowedModels?.length) || apiKeyInfo.disableNonPublicModels === true);
-      if (hasModelRestrictions && apiKey) {
-        const modelAllowed = await isModelAllowedForKey(apiKey, modelString);
-        if (!modelAllowed) return false;
+      // #12886: combo-name allow-list must not skip inner targets (#9057 still
+      // checks auto/* / disableNonPublic via comboTargetPassesKeyModelPolicy).
+      if (!(await comboTargetPassesKeyModelPolicy({ apiKey, apiKeyInfo, requestedModelStr: resolvedModelStr, targetModelStr: modelString, isModelAllowedForKey }))) {
+        return false;
       }
 
       // Use getModelInfo to resolve custom prefixes, but prefer the combo
