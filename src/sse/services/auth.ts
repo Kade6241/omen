@@ -121,6 +121,7 @@ import {
 import { isFreeModel } from "@/shared/utils/freeModels";
 import {
   applySessionAffinityPin,
+  extractSessionAffinityInputText,
   formatSessionKeyForLog,
   resolveForcedConnectionForCredentialPool,
   resolveSessionAffinityTtlMs,
@@ -226,104 +227,6 @@ function normalizeSessionKey(value: unknown, prefix: string): string | null {
   }
   return `${prefix}:sha256:${createHash("sha256").update(trimmed).digest("hex")}`;
 }
-const SESSION_HASH_TEXT_LIMIT = 4096;
-
-function extractTextForSessionHash(value: unknown): string | null {
-  if (typeof value === "string") return value;
-
-  if (Array.isArray(value)) {
-    const parts: string[] = [];
-    let totalLen = 0;
-    for (const item of value) {
-      if (totalLen >= SESSION_HASH_TEXT_LIMIT) break;
-      let text: string | null = null;
-      if (typeof item === "string") {
-        text = item;
-      } else {
-        const record = asRecord(item);
-        if (typeof record.text === "string") text = record.text;
-        else if (typeof record.content === "string") text = record.content;
-      }
-      if (text) {
-        parts.push(text);
-        totalLen += text.length;
-      }
-    }
-    return parts.length > 0 ? parts.join("\n").slice(0, SESSION_HASH_TEXT_LIMIT) : null;
-  }
-
-  if (value && typeof value === "object") {
-    const record = value as Record<string, unknown>;
-    // Known text fields — covers OpenAI, Anthropic, and most providers
-    if (typeof record.text === "string" && record.text.trim().length > 0) {
-      return record.text.slice(0, SESSION_HASH_TEXT_LIMIT);
-    }
-    if (typeof record.content === "string" && record.content.trim().length > 0) {
-      return record.content.slice(0, SESSION_HASH_TEXT_LIMIT);
-    }
-    if (typeof record.prompt === "string" && record.prompt.trim().length > 0) {
-      return record.prompt.slice(0, SESSION_HASH_TEXT_LIMIT);
-    }
-    // Gemini format: { parts: [{ text: "..." }, ...] }
-    if (Array.isArray(record.parts)) {
-      const partsText = extractTextForSessionHash(record.parts);
-      if (partsText) return partsText;
-    }
-    // No recognisable text field — return null rather than risking a
-    // potentially huge JSON.stringify on arbitrary payload shapes.
-    return null;
-  }
-
-  return null;
-}
-function getFirstInputText(body: unknown): string | null {
-  const record = asRecord(body);
-
-  // Codex / Responses API: { input: "..." | [...] }
-  if (record.input !== undefined) {
-    if (typeof record.input === "string") return record.input;
-    if (Array.isArray(record.input)) {
-      for (const item of record.input) {
-        const itemRecord = asRecord(item);
-        const text = extractTextForSessionHash(itemRecord.content ?? item);
-        if (text && text.trim().length > 0) return text;
-      }
-    }
-    const text = extractTextForSessionHash(record.input);
-    if (text && text.trim().length > 0) return text;
-  }
-
-  // OpenAI Chat / Anthropic Messages: { messages: [...] }
-  if (Array.isArray(record.messages)) {
-    const userMessage = record.messages.find((message) => asRecord(message).role === "user");
-    const firstMessage = userMessage ?? record.messages[0];
-    const text = extractTextForSessionHash(asRecord(firstMessage).content ?? firstMessage);
-    if (text && text.trim().length > 0) return text;
-  }
-
-  // Google Gemini: { contents: [{ role: "user", parts: [{ text: "..." }] }] }
-  if (Array.isArray(record.contents)) {
-    const userContent = record.contents.find((c) => asRecord(c).role === "user");
-    const firstContent = userContent ?? record.contents[0];
-    const text = extractTextForSessionHash(asRecord(firstContent).parts ?? firstContent);
-    if (text && text.trim().length > 0) return text;
-  }
-
-  // OpenAI Legacy Completions / Anthropic /v1/complete / Ollama: { prompt: "..." }
-  if (typeof record.prompt === "string" && record.prompt.trim().length > 0) {
-    return record.prompt;
-  }
-
-  // Other common root-level text fields
-  if (typeof record.query === "string" && record.query.trim().length > 0) {
-    return record.query;
-  }
-  if (typeof record.instruction === "string" && record.instruction.trim().length > 0) {
-    return record.instruction;
-  }
-
-  return null;
-}
 export function extractSessionAffinityKey(
   body: unknown,
   headers?: Headers | { get?: (name: string) => string | null } | null
@@ -346,9 +249,9 @@ export function extractSessionAffinityKey(
     normalizeSessionKey(record.prompt_cache_key, "prompt-cache");
   if (explicitKey) return explicitKey;
 
-  const inputText = getFirstInputText(body);
+  const inputText = extractSessionAffinityInputText(body);
   if (!inputText || inputText.trim().length === 0) return null;
-  return `input:sha256:${createHash("sha256").update(inputText.slice(0, 4096)).digest("hex")}`;
+  return `input:sha256:${createHash("sha256").update(inputText).digest("hex")}`;
 }
 function getCodexLimitPolicy(providerSpecificData: JsonRecord): {
   use5h: boolean;
