@@ -10,7 +10,6 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-test-flag-loop-"));
 process.env.DATA_DIR = tmpDir;
 
-const core = await import("../../src/lib/db/core.ts");
 const { FEATURE_FLAG_DEFINITIONS } =
   await import("../../src/shared/constants/featureFlagDefinitions.ts");
 const { setFeatureFlagOverride, clearAllFeatureFlagOverrides } =

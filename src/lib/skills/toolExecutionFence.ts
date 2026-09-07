@@ -110,7 +110,10 @@ export async function runWithServerToolFence<T>(
         }
       })();
 
-      const entry = { promise: wrapperPromise as Promise<unknown>, status: "pending" as const };
+      const entry: { promise: Promise<unknown>; status: "pending" | "resolved" | "rejected" } = {
+        promise: wrapperPromise as Promise<unknown>,
+        status: "pending",
+      };
       activePromises.set(key, entry);
       wrapperPromise.then(
         () => {
