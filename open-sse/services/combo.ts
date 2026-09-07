@@ -37,6 +37,10 @@ import {
 } from "./combo/failureTracker.ts";
 import { buildNoUpstreamResponseDiagnostics, buildRecoveryHint } from "./combo/pinRecovery.ts";
 import { formatExhaustedConnectionKey } from "./combo/comboDiagFormat.ts";
+import {
+  collectQuotaWindowExclusions,
+  formatQuotaSkipMessage,
+} from "./combo/quotaSkipDiagnostics.ts";
 import { buildTargetTimeoutRunner } from "./combo/targetTimeoutRunner.ts";
 import { recordComboRequest, recordComboShadowRequest, getComboMetrics } from "./comboMetrics.ts";
 import { qualityScoreFor } from "./routing/index.ts";
@@ -1199,6 +1203,9 @@ async function handleComboChatInner({
         excluded: [
           ...[...exhaustedProviders].map((p) => ({ provider: p, reason: "exhausted" })),
           ...[...exhaustedConnections].map((c) => formatExhaustedConnectionKey(String(c))),
+          ...(terminalReason === "all_targets_skipped"
+            ? collectQuotaWindowExclusions(orderedTargets)
+            : []),
         ],
         attemptOrder: comboAttemptOrder,
         terminalReason,
@@ -2818,10 +2825,13 @@ async function handleComboChatInner({
             latencyMs,
             fallbackCount,
           });
+          const quotaSkip = formatQuotaSkipMessage(collectQuotaWindowExclusions(orderedTargets));
           return withQuotaExhaustionClassification(
             errorResponseWithComboDiagnostics(
               503,
-              "Service temporarily unavailable: all targets were skipped by pre-dispatch filters",
+              quotaSkip
+                ? `Service temporarily unavailable: all targets were skipped by pre-dispatch filters (${quotaSkip})`
+                : "Service temporarily unavailable: all targets were skipped by pre-dispatch filters",
               buildComboDiag("all_targets_skipped"),
               { code: "ALL_TARGETS_SKIPPED", type: "service_unavailable" }
             ),
@@ -4036,16 +4046,21 @@ async function handleRoundRobinCombo({
 
   if (!lastStatus) {
     if (recordedAttempts === 0) {
-      return new Response(
-        JSON.stringify({
-          error: {
-            message:
-              "Service temporarily unavailable: all targets were skipped by pre-dispatch filters",
-            type: "service_unavailable",
-            code: "ALL_TARGETS_SKIPPED",
-          },
-        }),
-        { status: 503, headers: { "Content-Type": "application/json" } }
+      const quotaExcluded = collectQuotaWindowExclusions(filteredTargets);
+      const quotaSkip = formatQuotaSkipMessage(quotaExcluded);
+      return errorResponseWithComboDiagnostics(
+        503,
+        quotaSkip
+          ? `Service temporarily unavailable: all targets were skipped by pre-dispatch filters (${quotaSkip})`
+          : "Service temporarily unavailable: all targets were skipped by pre-dispatch filters",
+        {
+          poolSize: filteredTargets.length,
+          attempted: 0,
+          excluded: quotaExcluded,
+          attemptOrder: [],
+          terminalReason: "all_targets_skipped",
+        },
+        { code: "ALL_TARGETS_SKIPPED", type: "service_unavailable" }
       );
     }
     return new Response(
