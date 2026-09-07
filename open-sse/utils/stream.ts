@@ -180,7 +180,6 @@ type StreamOptions = {
    * codex-compatible `namespace` + `name` fields.
    */
   requestToolIdentityMap?: Map<string, { namespace: string; name: string }> | null;
-  /** High water mark for the TransformStream internal buffer (default: 16384) */
   highWaterMark?: number;
 };
 
@@ -1211,8 +1210,6 @@ export function createSSEStream(options: StreamOptions = {}) {
     });
     return true;
   };
-
-  const highWaterMark = options.highWaterMark ?? 16384;
 
   return new TransformStream(
     {
@@ -2996,8 +2993,8 @@ export function createSSEStream(options: StreamOptions = {}) {
         clearIdleTimer();
       },
     },
-    { highWaterMark },
-    { highWaterMark }
+    { highWaterMark: options.highWaterMark ?? 16384 },
+    { highWaterMark: options.highWaterMark ?? 16384 }
   );
 }
 
@@ -3054,8 +3051,7 @@ export function createPassthroughStreamWithLogger(
   apiKeyInfo: unknown = null,
   onFailure: ((payload: StreamFailurePayload) => boolean | void | Promise<void>) | null = null,
   clientResponseFormat: string | null = null,
-  requestToolIdentityMap: Map<string, { namespace: string; name: string }> | null = null,
-  highWaterMark?: number
+  requestToolIdentityMap: Map<string, { namespace: string; name: string }> | null = null
 ) {
   return createSSEStream({
     mode: STREAM_MODE.PASSTHROUGH,
@@ -3070,7 +3066,6 @@ export function createPassthroughStreamWithLogger(
     onFailure,
     clientResponseFormat,
     requestToolIdentityMap,
-    highWaterMark,
   });
 }
 
