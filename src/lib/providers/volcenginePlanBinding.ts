@@ -118,7 +118,20 @@ export async function detectPlan(
   if (!result.ok) {
     return { available: false, usage: {}, error: result.error };
   }
-  return { available: true, usage: record(result.json.Result), error: null };
+  const usage = record(result.json.Result);
+  if (kind === "coding") {
+    const quotaUsage = usage.QuotaUsage;
+    if (!Array.isArray(quotaUsage) || quotaUsage.length === 0) {
+      return { available: false, usage: {}, error: "No active Coding Plan quota windows" };
+    }
+  } else if (kind === "agent") {
+    const hasFiveHour = Boolean(usage.AFPFiveHour && Object.keys(record(usage.AFPFiveHour)).length > 0);
+    const hasWeekly = Boolean(usage.AFPWeekly && Object.keys(record(usage.AFPWeekly)).length > 0);
+    if (!hasFiveHour && !hasWeekly) {
+      return { available: false, usage: {}, error: "No active Agent Plan quota windows" };
+    }
+  }
+  return { available: true, usage, error: null };
 }
 
 function firstApiKeyItem(result: JsonRecord): JsonRecord | null {
