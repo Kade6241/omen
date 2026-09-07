@@ -16,6 +16,7 @@ const settingsDb = await import("../../src/lib/db/settings.ts");
 const apiKeysDb = await import("../../src/lib/db/apiKeys.ts");
 const featureFlagsDb = await import("../../src/lib/db/featureFlags.ts");
 const modelsDevSync = await import("../../src/lib/modelsDevSync.ts");
+const { runContextWindowReconcile } = await import("../../src/lib/contextWindowResolver.ts");
 const v1ModelsCatalog = await import("../../src/app/api/v1/models/catalog.ts");
 
 async function resetStorage() {
@@ -23,10 +24,7 @@ async function resetStorage() {
   apiKeysDb.resetApiKeyState();
   fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
-  // #6408 added a 1.5s TTL response cache to getUnifiedModelsResponse keyed only by
-  // (prefix, isCodex client, apiKey) — NOT by DB/settings state. Without clearing it
-  // between test cases, a test running within the TTL window of a previous one gets
-  // served the previous test's stale serialized catalog instead of a fresh build.
+  // Reset response caches alongside SQLite so cases cannot reuse a prior catalog.
   v1ModelsCatalog.__resetCatalogBuilderRunsForTest();
 }
 
@@ -628,15 +626,15 @@ test("v1 models catalog exposes refreshed GitHub Copilot aliases and drops retir
     new Request("http://localhost/api/v1/models")
   );
   const body = (await response.json()) as any;
-  const aliasModel = body.data.find((item) => item.id === "gh/gpt-5.4");
-  const providerModel = body.data.find((item) => item.id === "github/gpt-5.4");
-  const codexModel = body.data.find((item) => item.id === "gh/gpt-5.3-codex");
-  const opusModel = body.data.find((item) => item.id === "github/claude-opus-4.7");
+  const aliasModel = body.data.find((item) => item.id === "gh/gpt-6-astra");
+  const providerModel = body.data.find((item) => item.id === "github/gpt-6-astra");
+  const solModel = body.data.find((item) => item.id === "gh/gpt-5.6-sol");
+  const opusModel = body.data.find((item) => item.id === "github/claude-opus-5");
 
   assert.equal(response.status, 200);
   assert.ok(aliasModel);
   assert.ok(providerModel);
-  assert.ok(codexModel);
+  assert.ok(solModel);
   assert.ok(opusModel);
   assert.equal(providerModel.parent, aliasModel.id);
   assert.equal(
@@ -952,6 +950,8 @@ test("v1 models catalog advertises GLM-5.2 provider aliases with hosted context 
         "z-ai/glm-5.2": capability({ limit_context: 128000, limit_input: 128000 }),
       },
     });
+    // Discovery schedules reconciliation asynchronously; finish it before snapshotting.
+    await runContextWindowReconcile();
 
     const response = await v1ModelsCatalog.getUnifiedModelsResponse(
       new Request("http://localhost/api/v1/models")
@@ -1284,7 +1284,7 @@ test("v1 models catalog exposes Bedrock Claude token limits from static metadata
   assert.equal(opus46.max_output_tokens, 128000);
 });
 
-test("v1 models catalog lets provider-specific synced limits beat global static specs", async () => {
+test("v1 models catalog clamps registry input limits to the synced provider window", async () => {
   await seedConnection("github", {
     authType: "oauth",
     name: "github-copilot-models-dev",
@@ -1295,7 +1295,7 @@ test("v1 models catalog lets provider-specific synced limits beat global static 
   try {
     modelsDevSync.saveModelsDevCapabilities({
       github: {
-        "gpt-5.5": {
+        "gpt-5.6-sol": {
           tool_call: true,
           reasoning: true,
           attachment: true,
@@ -1321,12 +1321,12 @@ test("v1 models catalog lets provider-specific synced limits beat global static 
       new Request("http://localhost/api/v1/models")
     );
     const body = (await response.json()) as any;
-    const model = body.data.find((item) => item.id === "gh/gpt-5.5");
+    const model = body.data.find((item) => item.id === "gh/gpt-5.6-sol");
 
     assert.equal(response.status, 200);
     assert.ok(model);
     assert.equal(model.context_length, 400000);
-    assert.equal(model.max_input_tokens, 272000);
+    assert.equal(model.max_input_tokens, 400000);
     assert.equal(model.max_output_tokens, 128000);
   } finally {
     modelsDevSync.saveModelsDevCapabilities({});
