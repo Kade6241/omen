@@ -336,8 +336,8 @@ export const createProviderNodeSchema = z
       .enum([
         "chat",
         "responses",
-h        "audio-transcriptions",
-        "audio-speech",
+        "embeddings",
+        "audio-transcriptions",        "audio-speech",
         "images-generations",
       ])
       .optional(),
