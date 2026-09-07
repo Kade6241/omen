@@ -186,16 +186,53 @@ async function fetchRawApiKey(
   return { apiKey, id, maskedKey: stringField(item?.Key) || null, error: null };
 }
 
-async function upsertConnection(
+export async function upsertConnection(
   kind: PlanKind,
   apiKey: string,
   cookieHeader: string,
   csrfToken: string,
   apiKeyId: number | null,
-  usage: JsonRecord
+  usage: JsonRecord,
+  targetConnectionId?: string
 ) {
   const cfg = PLAN_CONFIG[kind];
+  const allConnections = (await getProviderConnections({ provider: cfg.provider })) as JsonRecord[];
+
+  let matched: JsonRecord | undefined;
+
+  // 1. targetConnectionId priority match (with provider affinity check)
+  if (targetConnectionId) {
+    matched = allConnections.find(
+      (conn) => stringField(conn.id) === targetConnectionId && stringField(conn.provider) === cfg.provider
+    );
+  }
+
+  // 2. Match by valid apiKey or valid volcApiKeyId
+  if (!matched && apiKey) {
+    matched = allConnections.find((conn) => stringField(conn.apiKey) === apiKey);
+  }
+  if (!matched && typeof apiKeyId === "number" && apiKeyId > 0) {
+    matched = allConnections.find((conn) => {
+      const psd = record(conn.providerSpecificData);
+      return Number(psd.volcApiKeyId) === apiKeyId;
+    });
+  }
+
+  // 3. Match by canonical default name
+  if (!matched) {
+    matched = allConnections.find((conn) => stringField(conn.name) === cfg.name);
+  }
+
+  // 4. Safe adoption for single connection scenario (e.g. user-named 'main')
+  if (!matched && allConnections.length === 1) {
+    matched = allConnections[0];
+  }
+
+  // 5. If multiple connections exist and none matched, do NOT clobber; fall through to create new connection.
+
+  const existingPsd = matched ? record(matched.providerSpecificData) : {};
   const providerSpecificData = {
+    ...existingPsd,
     volcConsoleCookie: cookieHeader,
     volcCsrfToken: csrfToken,
     volcApiKeyId: apiKeyId,
@@ -205,14 +242,10 @@ async function upsertConnection(
     autoSync: true,
   };
 
-  const existing = (await getProviderConnections({ provider: cfg.provider })).find(
-    (conn: JsonRecord) => stringField(conn.name) === cfg.name
-  );
-
-  if (existing?.id) {
-    return await updateProviderConnection(stringField(existing.id), {
+  if (matched?.id) {
+    return await updateProviderConnection(stringField(matched.id), {
       apiKey,
-      name: cfg.name,
+      name: stringField(matched.name) || cfg.name,
       providerSpecificData,
       isActive: true,
       testStatus: "active",
@@ -230,7 +263,10 @@ async function upsertConnection(
   });
 }
 
-export async function bindVolcenginePlansFromConsoleCredentials(credentials: JsonRecord) {
+export async function bindVolcenginePlansFromConsoleCredentials(
+  credentials: JsonRecord,
+  options?: { targetConnectionId?: string }
+) {
   const cookieHeader = buildCookieHeader(credentials);
   const csrfToken = extractCsrf(credentials, cookieHeader);
   if (!cookieHeader || !csrfToken) {
@@ -273,7 +309,8 @@ export async function bindVolcenginePlansFromConsoleCredentials(credentials: Jso
       cookieHeader,
       csrfToken,
       key.id,
-      detected.usage
+      detected.usage,
+      options?.targetConnectionId
     );
     results.push({
       plan: kind,
@@ -290,3 +327,7 @@ export async function bindVolcenginePlansFromConsoleCredentials(credentials: Jso
     results,
   };
 }
+
+export const __testing = {
+  upsertConnection,
+};
