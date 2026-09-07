@@ -409,6 +409,7 @@ import {
 import {
   lockModel,
   lockModelIfPerModelQuota,
+  hasPerModelQuota,
   recordCoreOwnedAntigravityQuotaState,
   shouldDeferAntigravityQuotaStateToCaller,
 } from "../services/accountFallback.ts";
@@ -4438,6 +4439,18 @@ export async function handleChatCore({
                 const quotaScope = getQuotaScopeLabelForProvider(provider, model);
                 console.warn(
                   `[provider] Node ${errorConnectionId} ${quotaScope}-only quota exhausted (${statusCode}) for ${model} - ${Math.ceil(quotaCooldownMs / 1000)}s (cooldown_scope=${quotaScope}, ttl_source=${retryAfterMs ? "upstream" : "inferred"}, connection stays active)`
+                );
+              } else if (hasPerModelQuota(provider, model)) {
+                // Compatible / passthrough gateways: a 402 without a model id
+                // still must not terminalize the whole connection. Record the
+                // error for operators; sibling models stay selectable.
+                await updateProviderConnection(errorConnectionId, {
+                  lastErrorType: errorType,
+                  lastError: persistentMessage,
+                  errorCode: statusCode,
+                });
+                console.warn(
+                  `[provider] Node ${errorConnectionId} per-model quota exhausted (${statusCode}) — connection stays active`
                 );
               } else {
                 await writeTerminalStatus(
