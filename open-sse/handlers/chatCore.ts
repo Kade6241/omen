@@ -1,6 +1,7 @@
 import {
   extractRequestToolIdentityMap,
   resolveResponseToolNameMap,
+  resolveRequestToolIdentity,
 } from "./chatCore/requestToolIdentity.ts";
 import { injectMemoryAndSkills } from "./chatCore/memorySkillsInjection.ts";
 import { resolveChatCoreRequestSetup } from "./chatCore/requestSetup.ts";
@@ -5133,7 +5134,7 @@ export async function handleChatCore({
       if (requestToolIdentityMap && Array.isArray(responseOutput)) {
         for (const item of responseOutput) {
           if (item?.type !== "function_call") continue;
-          const identity = requestToolIdentityMap.get(item.name);
+          const identity = resolveRequestToolIdentity(requestToolIdentityMap, item.name);
           if (identity) {
             item.namespace = identity.namespace;
             item.name = identity.name;

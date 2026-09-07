@@ -5,7 +5,6 @@
 import { register } from "../registry.ts";
 import { FORMATS } from "../formats.ts";
 import { appendToolCallArgumentDelta } from "../../utils/toolCallArguments.ts";
-import { projectCompletedStreamError } from "../../utils/streamErrorFormat.ts";
 import { fallbackToolCallId } from "../helpers/toolCallHelper.ts";
 import { shouldParseTextualReasoningTags } from "../../handlers/responseSanitizer.ts";
 import { getReadableReasoningValue } from "../../utils/reasoningFields.ts";
@@ -24,12 +23,12 @@ import {
 import { createEventEmitter } from "./openai-responses/eventEmitter.ts";
 import { buildResponsesToolCallItem } from "./responsesToolItem.ts";
 import { resolveRequestToolIdentity } from "./openai-responses/requestToolIdentity.ts";
-import { resolveLocalToolCallIndex } from "./openai-responses/toolCallLocalIndex.ts";
 import {
   synthesizeCompletedToolCalls,
   computeFinishReason,
   withAssistantRoleOnFirstDelta,
 } from "./openai-responses/synthesizeCompletedToolCalls.ts";
+
 // normalizeUpstreamFailure is re-exported for external importers (tests).
 export { normalizeUpstreamFailure } from "./openai-responses/pureHelpers.ts";
 
@@ -507,7 +506,7 @@ function toolCallOutputIndexBase(state) {
 
 function emitToolCall(state, emit, tc) {
   const tcIdx = tc.index ?? 0;
-  const outputIndex = toolCallOutputIndexBase(state) + resolveLocalToolCallIndex(state, tcIdx);
+  const outputIndex = toolCallOutputIndexBase(state) + normalizeOutputIndex(tcIdx);
   const newCallId = tc.id;
   const funcName = tc.function?.name;
 
@@ -543,10 +542,14 @@ function emitToolCall(state, emit, tc) {
   // unconditional `toolName === "apply_patch"` OR never actually implemented the carve-out.
   const toolName = state.funcNames[tcIdx] || funcName || "";
   const lowerName = toolName.toLowerCase();
+  const identity = resolveRequestToolIdentity(state.requestToolIdentityMap, toolName);
+  const resolvedLeaf = identity ? identity.name.toLowerCase() : lowerName;
   const isCustomTool =
-    ((lowerName === "apply_patch" || lowerName === "applypatch") &&
+    ((lowerName === "apply_patch" || lowerName === "applypatch" || resolvedLeaf === "apply_patch" || resolvedLeaf === "applypatch" || resolvedLeaf === "exec") &&
       !state.toolSchemas?.has?.(toolName)) ||
-    state.customToolNames?.has?.(toolName) === true;
+    state.customToolNames?.has?.(toolName) === true ||
+    (identity && state.customToolNames?.has?.(identity.name) === true) ||
+    state.customToolNames?.has?.(resolvedLeaf) === true;
 
   if (!state.funcCallIds[tcIdx] && newCallId) state.funcCallIds[tcIdx] = newCallId;
   const callId = state.funcCallIds[tcIdx];
@@ -610,16 +613,20 @@ function emitToolCall(state, emit, tc) {
 function closeToolCall(state, emit, idx, recordAsCompleted = true) {
   const callId = state.funcCallIds[idx];
   if (callId && !state.funcItemDone[idx]) {
-    const normalizedIndex = toolCallOutputIndexBase(state) + resolveLocalToolCallIndex(state, idx);
+    const normalizedIndex = toolCallOutputIndexBase(state) + normalizeOutputIndex(idx);
     const args = state.funcArgsBuf[idx] || "{}";
     const toolName = state.funcNames[idx] || "";
     // See emitToolCall()'s isCustomTool comment — must stay in sync (both compute the
     // same classification independently for their respective add/close call sites).
     const lowerName = toolName.toLowerCase();
+    const identity = resolveRequestToolIdentity(state.requestToolIdentityMap, toolName);
+    const resolvedLeaf = identity ? identity.name.toLowerCase() : lowerName;
     const isCustomTool =
-      ((lowerName === "apply_patch" || lowerName === "applypatch") &&
+      ((lowerName === "apply_patch" || lowerName === "applypatch" || resolvedLeaf === "apply_patch" || resolvedLeaf === "applypatch" || resolvedLeaf === "exec") &&
         !state.toolSchemas?.has?.(toolName)) ||
-      state.customToolNames?.has?.(toolName) === true;
+      state.customToolNames?.has?.(toolName) === true ||
+      (identity && state.customToolNames?.has?.(identity.name) === true) ||
+      state.customToolNames?.has?.(resolvedLeaf) === true;
 
     let funcItem;
     if (isCustomTool) {
@@ -747,7 +754,6 @@ function sendCompleted(state, emit) {
     // translator or the OpenAI-Responses translator itself when the upstream
     // SSE stream emits a JSON error object after partial content.
     const upstreamErr = state.upstreamError;
-    const publicUpstreamError = projectCompletedStreamError(upstreamErr);
 
     const response: Record<string, unknown> = {
       id: state.responseId,
@@ -755,7 +761,9 @@ function sendCompleted(state, emit) {
       created_at: state.created,
       status: upstreamErr ? "failed" : "completed",
       background: false,
-      error: publicUpstreamError,
+      error: upstreamErr
+        ? { code: String(upstreamErr.status ?? ""), message: upstreamErr.message ?? "" }
+        : null,
       output,
     };
 

@@ -213,3 +213,33 @@ test("Chat -> Responses keeps same wire names isolated between per-request strea
     { namespace: "mcp__two", name: "read" }
   );
 });
+
+test("Chat -> Responses restores namespace when provider collapses delimiter to single underscore (Gemini/Antigravity)", () => {
+  const wireName = "functions_exec";
+  const events = collectToolEvents(
+    wireName,
+    "call_exec_single",
+    identityMapFor("functions", "exec")
+  );
+  for (const item of Object.values(functionItems(events))) {
+    assert.deepEqual(
+      { namespace: item.namespace, name: item.name },
+      { namespace: "functions", name: "exec" }
+    );
+  }
+});
+
+test("Chat -> Responses restores namespace when provider uses dot notation", () => {
+  const wireName = "functions.exec";
+  const events = collectToolEvents(
+    wireName,
+    "call_exec_dot",
+    identityMapFor("functions", "exec")
+  );
+  for (const item of Object.values(functionItems(events))) {
+    assert.deepEqual(
+      { namespace: item.namespace, name: item.name },
+      { namespace: "functions", name: "exec" }
+    );
+  }
+});
