@@ -145,7 +145,7 @@ export function injectSystemPrompt<T>(body: T): T {
   }
 
   markInjected(result);
-  return result;
+  return Object.assign({}, body, result);
 }
 
 /**
